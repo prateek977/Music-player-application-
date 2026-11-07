@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://listen-up-lilac.vercel.app/sitemap.xml
