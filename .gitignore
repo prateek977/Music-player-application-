@@ -11,3 +11,7 @@ build/
 .idea/
 local.properties
 *.log
+
+# Python cache
+__pycache__/
+*.py[cod]
