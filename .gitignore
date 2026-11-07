@@ -1,0 +1,13 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.vite/
+.vercel/
+build/
+.gradle/
+.idea/
+local.properties
+*.log
