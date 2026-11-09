@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://listen-up-lilac.vercel.app/sitemap.xml
+Sitemap: https://listenup-web.vercel.app/sitemap.xml

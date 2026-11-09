@@ -1,19 +1,55 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { STARTER_ARTISTS } from '../../lib/starterCatalog';
+import { searchArtists } from '../../lib/artistDiscovery';
 
 export default function Step2Artists({ selectedArtists, onToggleArtist, onAddCustomArtist }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [customInput, setCustomInput] = useState('');
+  const [discoveredArtists, setDiscoveredArtists] = useState([]);
+  const [searching, setSearching] = useState(false);
 
-  // Filter artists based on search
+  // Debounced search via Deezer API
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q || q.length < 2) {
+      setDiscoveredArtists([]);
+      setSearching(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const results = await searchArtists(q, 10);
+        setDiscoveredArtists(results.map(r => ({
+          id: `deezer-${r.id}`,
+          name: r.name,
+          genre: 'Discovered Artist',
+          imageUrl: r.imageUrl
+        })));
+      } catch (e) {
+        console.warn('Artist discovery error:', e);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Combine local starter artists with live discovered artists
   const filteredArtists = useMemo(() => {
     if (!searchQuery.trim()) return STARTER_ARTISTS;
     const q = searchQuery.toLowerCase();
-    return STARTER_ARTISTS.filter(a => 
+    const localMatches = STARTER_ARTISTS.filter(a => 
       a.name.toLowerCase().includes(q) || 
       a.genre.toLowerCase().includes(q)
     );
-  }, [searchQuery]);
+    // Merge without duplicates
+    const existingNames = new Set(localMatches.map(a => a.name.toLowerCase()));
+    const additional = discoveredArtists.filter(d => !existingNames.has(d.name.toLowerCase()));
+    return [...localMatches, ...additional];
+  }, [searchQuery, discoveredArtists]);
 
   const handleAddCustom = (e) => {
     e.preventDefault();

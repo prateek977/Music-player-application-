@@ -19,7 +19,9 @@ export function AuthProvider({ children }) {
   const [authError, setAuthError] = useState(null);
 
   const userRef = useRef(null);
-  userRef.current = user;
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
   const fetchingUserIdRef = useRef(null);
 
   // Fetch full user profile & preferences from Supabase (or fallback adapter)

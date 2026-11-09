@@ -127,8 +127,8 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'signin' }) {
             {mode === 'forgot' && 'Reset your password'}
           </h2>
           <p className="text-xs text-[#9999A6] mt-1 max-w-xs">
-            {mode === 'signin' && 'Sign in to access your personalized mixes and rooms'}
-            {mode === 'signup' && 'Sync your taste, favorite artists, and rooms across devices'}
+            {mode === 'signin' && 'Sign in to access your personalized mixes and library'}
+            {mode === 'signup' && 'Sync your taste, favorite artists, and playlists across devices'}
             {mode === 'forgot' && 'Enter your email to receive recovery instructions'}
           </p>
         </div>

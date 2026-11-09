@@ -35,7 +35,6 @@ export default function NowPlayingScreen({
   onToggleFavorite,
   queue = [],
   onPlayFromQueue,
-  activeRoom = null,
   volume = 100,
   isMuted = false,
   onVolumeChange,
@@ -136,7 +135,7 @@ export default function NowPlayingScreen({
         {/* Center Context Label */}
         <div className="text-center min-w-0 px-2">
           <p className="text-[10px] font-bold tracking-widest uppercase text-[#9999A6]">
-            {activeRoom ? `Room • ${activeRoom}` : 'Now Playing'}
+            Now Playing
           </p>
           <p className="text-xs font-semibold text-[#F5F5F7] truncate max-w-[200px] sm:max-w-[260px]">
             {currentSong ? currentSong.title : 'ListenUp Stream'}

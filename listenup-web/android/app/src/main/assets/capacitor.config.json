@@ -1,5 +1,8 @@
 {
-	"appId": "com.example.app",
-	"appName": "listenup-web",
-	"webDir": "dist"
+	"appId": "com.listenup.app",
+	"appName": "ListenUp",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	}
 }

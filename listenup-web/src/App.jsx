@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { io } from 'socket.io-client';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { BackgroundMode } from '@anuradev/capacitor-background-mode';
 import { Capacitor } from '@capacitor/core';
@@ -14,11 +13,11 @@ import GuestMigrationModal from './components/profile/GuestMigrationModal';
 import { STARTER_ARTISTS } from './lib/starterCatalog';
 import { NowPlayingScreen } from './components/player';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
+import { nativeMedia, nativeStorage, isNativeAndroid } from './lib/nativeMediaBridge';
+import { rankSongs } from './lib/localRecommender';
+import { searchSongs, browseCategory } from './lib/nativeSearchBridge';
 
 gsap.registerPlugin(ScrollTrigger);
-
-// Canonical API Base URL fallback
-const API_BASE_URL = (import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '');
 
 export default function App() {
   // Authentication & Personalization State
@@ -189,32 +188,13 @@ export default function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [repeat, setRepeat] = useState('off'); // 'off' | 'all' | 'one'
   const [shuffle, setShuffle] = useState(false);
-  // Music Rooms State
-  const [activeRoom, setActiveRoom] = useState(null);
-  const [roomParticipants, setRoomParticipants] = useState([]);
-  const [roomActivity, setRoomActivity] = useState([]);
-  const [roomCode, setRoomCode] = useState('');
-  const [joinRoomCode, setJoinRoomCode] = useState('');
-  const [newRoomName, setNewRoomName] = useState('');
-  const [roomVisibility, setRoomVisibility] = useState('public');
-  const [displayName, setDisplayName] = useState(() => {
-    return localStorage.getItem('listenup_display_name') || 'Listener-' + Math.floor(Math.random() * 9000 + 1000);
-  });
-  const [publicRooms, setPublicRooms] = useState([]);
-  const [roomError, setRoomError] = useState('');
-  const [roomCreated, setRoomCreated] = useState(false);
-  const [isHost, setIsHost] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [pendingSongRequests, setPendingSongRequests] = useState([]);
-  const socketRef = useRef(null);
 
   const playerRef = useRef(null);
   const timerRef = useRef(null);
   const createPlaylistDialogRef = useRef(null);
   const isLoadingSongRef = useRef(false);
   const silentAudioRef = useRef(null);
-  const stateRef = useRef({ currentSong, queue, repeat, isPlaying, shuffle, activeRoom, isHost });
+  const stateRef = useRef({ currentSong, queue, repeat, isPlaying, shuffle });
 
   // GSAP Animation & UI Refs
   const mainContentRef = useRef(null);
@@ -241,8 +221,8 @@ export default function App() {
 
   // Sync state ref for YouTube event listeners
   useEffect(() => {
-    stateRef.current = { currentSong, queue, repeat, isPlaying, shuffle, activeRoom, isHost };
-  }, [currentSong, queue, repeat, isPlaying, shuffle, activeRoom, isHost]);
+    stateRef.current = { currentSong, queue, repeat, isPlaying, shuffle };
+  }, [currentSong, queue, repeat, isPlaying, shuffle]);
 
   // Load favorites, volume, playlists and fetch home categories on mount
   useEffect(() => {
@@ -273,7 +253,58 @@ export default function App() {
       initPlayer();
     }
 
+    // Native Android Background Media3 & Room DB integration
+    let nativeCleanup = () => {};
+    if (isNativeAndroid()) {
+      nativeMedia.initialize();
+
+      const subState = nativeMedia.addPlaybackStateListener((data) => {
+        if (typeof data.isPlaying === 'boolean') {
+          setIsPlaying(data.isPlaying);
+        }
+        if (data.state === 'BUFFERING') {
+          setIsBuffering(true);
+        } else if (data.state === 'READY') {
+          setIsBuffering(false);
+        }
+      });
+
+      const subPos = nativeMedia.addPositionChangeListener((data) => {
+        if (data.positionMs !== undefined) {
+          setCurrentTime(data.positionMs / 1000);
+        }
+        if (data.durationMs !== undefined && data.durationMs > 0) {
+          setDuration(data.durationMs / 1000);
+        }
+      });
+
+      const subTrack = nativeMedia.addTrackChangeListener((track) => {
+        if (track && track.id) {
+          setCurrentSong(prev => (prev?.id === track.id ? prev : { ...prev, ...track }));
+        }
+      });
+
+      // Hydrate favorites and playlists from Room SQLite
+      nativeStorage.getFavorites().then(roomFavs => {
+        if (roomFavs && roomFavs.length > 0) {
+          setFavorites(roomFavs);
+        }
+      });
+      nativeStorage.getPlaylists().then(roomPls => {
+        if (roomPls && roomPls.length > 0) {
+          setPlaylists(roomPls);
+        }
+      });
+
+      nativeCleanup = () => {
+        subState.remove();
+        subPos.remove();
+        subTrack.remove();
+      };
+    }
+
     return () => {
+      nativeCleanup();
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
@@ -307,240 +338,21 @@ export default function App() {
     localStorage.setItem('listenup_playlists', JSON.stringify(playlists));
     localStorage.setItem('listenup_queue', JSON.stringify(queue));
   }, [playlists, queue]);
-  // Socket.IO connection for Music Rooms
-  useEffect(() => {
-    const backendUrl = API_BASE_URL || window.location.origin;
-    const socket = io(backendUrl, { transports: ['websocket', 'polling'] });
-    socketRef.current = socket;
-
-    socket.on('connected', (data) => {
-      console.log('Socket connected:', data.sid);
-    });
-
-    socket.on('room_created', (room) => {
-      setActiveRoom(room);
-      setRoomCode(room.code);
-      setRoomParticipants(room.participants || []);
-      setIsHost(true);
-      setRoomCreated(true);
-      setRoomError('');
-    });
-
-    socket.on('room_joined', (room) => {
-      setActiveRoom(room);
-      setRoomCode(room.code);
-      setRoomParticipants(room.participants || []);
-      setIsHost(false);
-      setRoomCreated(false);
-      setRoomError('');
-      // If host is playing a song, sync to it
-      if (room.currentSong) {
-        setCurrentSong(room.currentSong);
-        if (room.isPlaying && playerRef.current && playerRef.current.loadVideoById) {
-          playerRef.current.loadVideoById(room.currentSong.id, room.currentTime || 0);
-          setIsPlaying(true);
-        }
-      }
-    });
-
-    socket.on('room_update', (room) => {
-      setActiveRoom(room);
-      setRoomParticipants(room.participants || []);
-    });
-
-    socket.on('room_left', () => {
-      setActiveRoom(null);
-      setRoomCode('');
-      setRoomParticipants([]);
-      setRoomActivity([]);
-      setIsHost(false);
-      setRoomCreated(false);
-    });
-
-    socket.on('room_error', (data) => {
-      setRoomError(data.message);
-    });
-
-    socket.on('activity', (data) => {
-      setRoomActivity(prev => [...prev.slice(-49), data]);
-    });
-
-    socket.on('playback_update', (data) => {
-      // Listeners receive playback state from host
-      if (data.currentSong) {
-        const currentId = stateRef.current.currentSong?.id;
-        if (currentId !== data.currentSong.id) {
-          // New song — load it at the host's current time
-          setCurrentSong(data.currentSong);
-          if (playerRef.current) {
-            isLoadingSongRef.current = true;
-            if (data.isPlaying) {
-              playerRef.current.loadVideoById?.(data.currentSong.id, data.currentTime || 0);
-            } else {
-              playerRef.current.cueVideoById?.(data.currentSong.id, data.currentTime || 0);
-            }
-          }
-        } else if (Math.abs((playerRef.current?.getCurrentTime?.() || 0) - (data.currentTime || 0)) > 4) {
-          // Same song but time drifted — seek to sync
-          playerRef.current?.seekTo?.(data.currentTime, true);
-        }
-      }
-      // Force play/pause state to match the host
-      if (data.isPlaying) {
-        playerRef.current?.playVideo?.();
-        setIsPlaying(true);
-      } else {
-        playerRef.current?.pauseVideo?.();
-        setIsPlaying(false);
-      }
-    });
-
-    socket.on('load_song', (data) => {
-      if (data.song) {
-        setCurrentSong(data.song);
-        setIsBuffering(true);
-        if (playerRef.current) {
-          playerRef.current.cueVideoById?.(data.song.id);
-        }
-      }
-    });
-
-    socket.on('start_playback', (data) => {
-      if (playerRef.current) {
-        playerRef.current.playVideo?.();
-        if (data.currentTime !== undefined) {
-          playerRef.current.seekTo?.(data.currentTime, true);
-        }
-        setIsPlaying(true);
-        setIsBuffering(false);
-      }
-    });
-
-    // Host receives song requests from listeners — show as notification
-    socket.on('song_requested', (data) => {
-      if (data.song) {
-        setPendingSongRequests(prev => [...prev, {
-          id: Date.now() + Math.random(),
-          song: data.song,
-          requestedBy: data.requestedBy || 'Someone'
-        }]);
-      }
-    });
-
-    // Host receives play/pause requests from listeners
-    socket.on('playback_requested', (data) => {
-      setIsPlaying(data.isPlaying);
-    });
-
-    return () => socket.disconnect();
-  }, []);
-
-  // Sync playback to room when host changes song or play state
-  useEffect(() => {
-    if (isHost && activeRoom && socketRef.current) {
-      socketRef.current.emit('sync_playback', {
-        currentSong,
-        isPlaying,
-        currentTime: playerRef.current?.getCurrentTime?.() || 0
-      });
-    }
-  }, [currentSong, isPlaying, isHost, activeRoom]);
-
-  // Periodic time sync from host (every 3 seconds) to keep listeners in lockstep
-  useEffect(() => {
-    if (!isHost || !activeRoom || !socketRef.current) return;
-    const interval = setInterval(() => {
-      const state = stateRef.current;
-      if (state.currentSong && state.isPlaying) {
-        socketRef.current?.emit('sync_playback', {
-          currentSong: state.currentSong,
-          isPlaying: state.isPlaying,
-          currentTime: playerRef.current?.getCurrentTime?.() || 0
-        });
-      }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [isHost, activeRoom]);
-
-  // Fetch public rooms when entering the rooms tab
-  useEffect(() => {
-    if (activeTab === 'rooms' && !activeRoom) {
-      fetch(`${API_BASE_URL}/api/rooms`).then(r => r.json()).then(data => setPublicRooms(data)).catch(() => {});
-    }
-  }, [activeTab, activeRoom]);
-
-  // Save display name
-  useEffect(() => {
-    localStorage.setItem('listenup_display_name', displayName);
-  }, [displayName]);
-
-  // Auto-join room from URL (e.g. /room/MZK-4839)
-  useEffect(() => {
-    const path = window.location.pathname;
-    const match = path.match(/^\/room\/([A-Z0-9-]+)$/i);
-    if (match && socketRef.current) {
-      const code = match[1].toUpperCase();
-      setActiveTab('rooms');
-      setJoinRoomCode(code);
-      // Wait a moment for the socket to be fully connected
-      const timer = setTimeout(() => {
-        socketRef.current?.emit('join_room_request', { roomCode: code, displayName });
-      }, 1000);
-      // Clean up URL
-      window.history.replaceState({}, '', '/');
-      return () => clearTimeout(timer);
-    }
-  }, []);
-
-  const handleCreateRoom = () => {
-    if (!newRoomName.trim()) return;
-    socketRef.current?.emit('create_room', {
-      roomName: newRoomName.trim(),
-      visibility: roomVisibility,
-      displayName
-    });
-  };
-
-  const handleJoinRoom = () => {
-    if (!joinRoomCode.trim()) return;
-    socketRef.current?.emit('join_room_request', {
-      roomCode: joinRoomCode.trim().toUpperCase(),
-      displayName
-    });
-  };
-
-  const handleLeaveRoom = () => {
-    socketRef.current?.emit('leave_room_request', { roomCode });
-  };
-
-  const copyToClipboard = (text, type) => {
-    navigator.clipboard.writeText(text);
-    if (type === 'code') { setCopiedCode(true); setTimeout(() => setCopiedCode(false), 2000); }
-    if (type === 'link') { setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); }
-  };
-
-  const handleAcceptSongRequest = (request) => {
-    setCurrentSong(request.song);
-    setQueue(prev => {
-      if (prev.some(s => s.id === request.song.id)) return prev;
-      return [...prev, request.song];
-    });
-    setPendingSongRequests(prev => prev.filter(r => r.id !== request.id));
-  };
-
-  const handleDeclineSongRequest = (request) => {
-    setPendingSongRequests(prev => prev.filter(r => r.id !== request.id));
-  };
-
 
   async function fetchHomeData() {
     setHomeLoading(true);
+    // Check local offline cache first
+    try {
+      const cached = localStorage.getItem('listenup_cached_home_data');
+      if (cached) {
+        setHomeData(JSON.parse(cached));
+      }
+    } catch (e) {}
+
     const categories = ['trending', 'sad', 'bollywood', 'hollywood', 'lofi', 'pop', 'romantic', 'party'];
     try {
       const promises = categories.map(async (cat) => {
-        const res = await fetch(`${API_BASE_URL}/api/browse?category=${cat}`);
-        if (!res.ok) throw new Error(`Failed to fetch ${cat}`);
-        const data = await res.json();
+        const data = await browseCategory(cat);
         return { cat, data };
       });
       const results = await Promise.allSettled(promises);
@@ -554,103 +366,73 @@ export default function App() {
         romantic: [],
         party: []
       };
+      let hasData = false;
       results.forEach((res) => {
-        if (res.status === 'fulfilled') {
-          newData[res.value.cat] = Array.isArray(res.value.data) ? res.value.data : [];
+        if (res.status === 'fulfilled' && Array.isArray(res.value.data) && res.value.data.length > 0) {
+          newData[res.value.cat] = res.value.data;
+          hasData = true;
         }
       });
-      setHomeData(newData);
+      if (hasData) {
+        setHomeData(newData);
+        try {
+          localStorage.setItem('listenup_cached_home_data', JSON.stringify(newData));
+        } catch (e) {}
+      }
     } catch (err) {
-      console.error("Error loading home categories:", err);
+      console.warn("Home categories fetch note (using local cache):", err);
     } finally {
       setHomeLoading(false);
     }
   };
 
-  // Fetch Personalized Song Suggestions based on user preferences
+  // Fetch Personalized Song Suggestions based on user preferences and local history
   const fetchSuggestedSongs = async () => {
     setSuggestedLoading(true);
     try {
       const activeArtists = (preferences?.artists || []).map(a => typeof a === 'string' ? a : a.name).filter(Boolean);
-      const activeGenres = preferences?.genres || [];
-      const activeLangs = preferences?.languages || [];
-      const activeMoods = preferences?.moods || [];
+      const topArtist = activeArtists.length > 0 ? activeArtists[0] : 'Arijit Singh';
 
-      // Use saved preferences or default starter taste for high quality recommendations
-      const requestArtists = activeArtists.length > 0 ? activeArtists : ['Arijit Singh', 'Diljit Dosanjh', 'The Weeknd'];
-      const requestGenres = activeGenres.length > 0 ? activeGenres : ['bollywood', 'pop'];
-      const requestLangs = activeLangs.length > 0 ? activeLangs : ['Hindi', 'English'];
-      const requestMoods = activeMoods.length > 0 ? activeMoods : ['chill'];
+      // Attempt to fetch fresh tracks for the user's top artist if connected
+      let artistTracks = [];
+      try {
+        artistTracks = await searchSongs(`${topArtist} songs`, 10);
+      } catch (_) {}
 
-      const response = await fetch(`${API_BASE_URL}/api/recommendations/personalized`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          artists: requestArtists,
-          genres: requestGenres,
-          languages: requestLangs,
-          moods: requestMoods
-        })
-      });
+      const candidatePool = [
+        ...artistTracks,
+        ...(homeData.bollywood || []),
+        ...(homeData.trending || []),
+        ...(homeData.pop || []),
+        ...(homeData.romantic || []),
+        ...(homeData.lofi || []),
+        ...(homeData.party || []),
+        ...favorites,
+        ...recentlyPlayed
+      ];
 
-      if (response.ok) {
-        const data = await response.json();
-        const collectedSongs = [];
-        const seenIds = new Set();
-
-        if (data.tailoredMix?.songs && Array.isArray(data.tailoredMix.songs)) {
-          if (data.tailoredMix.title) setSuggestedMixTitle(data.tailoredMix.title);
-          for (const s of data.tailoredMix.songs) {
-            if (s && s.id && !seenIds.has(s.id)) {
-              seenIds.add(s.id);
-              collectedSongs.push(s);
-            }
-          }
+      const uniqueCandidates = [];
+      const seen = new Set();
+      for (const song of candidatePool) {
+        if (song && song.id && !seen.has(song.id)) {
+          seen.add(song.id);
+          uniqueCandidates.push(song);
         }
+      }
 
-        if (Array.isArray(data.artistSections)) {
-          for (const sec of data.artistSections) {
-            for (const s of (sec.songs || [])) {
-              if (s && s.id && !seenIds.has(s.id)) {
-                seenIds.add(s.id);
-                collectedSongs.push(s);
-              }
-            }
-          }
-        }
-
-        if (collectedSongs.length > 0) {
-          setSuggestedSongs(collectedSongs);
-          try {
-            localStorage.setItem('listenup_suggested_songs', JSON.stringify(collectedSongs));
-          } catch (e) {}
-          setSuggestedLoading(false);
-          return;
-        }
+      if (uniqueCandidates.length > 0) {
+        const rankedLocal = rankSongs(uniqueCandidates, preferences, recentlyPlayed, favorites, 16);
+        const finalSuggestions = rankedLocal.length > 0 ? rankedLocal : uniqueCandidates.slice(0, 16);
+        setSuggestedSongs(finalSuggestions);
+        try {
+          localStorage.setItem('listenup_suggested_songs', JSON.stringify(finalSuggestions));
+        } catch (e) {}
       }
     } catch (err) {
-      console.warn('Personalized suggestions fetch warning:', err);
+      console.warn('Personalized suggestions generation note:', err);
+    } finally {
+      setSuggestedLoading(false);
     }
-
-    // Fallback gracefully to catalog items if backend endpoint is unavailable
-    const fallbackList = [
-      ...(homeData.bollywood || []),
-      ...(homeData.trending || []),
-      ...(homeData.pop || []),
-      ...(homeData.romantic || [])
-    ];
-    const uniqueFallback = [];
-    const seen = new Set();
-    for (const song of fallbackList) {
-      if (song && song.id && !seen.has(song.id)) {
-        seen.add(song.id);
-        uniqueFallback.push(song);
-      }
-    }
-    if (uniqueFallback.length > 0) {
-      setSuggestedSongs(uniqueFallback.slice(0, 16));
-    }
-    setSuggestedLoading(false);
   };
 
   // Re-fetch suggested songs whenever user preferences update
@@ -692,16 +474,10 @@ export default function App() {
   };
 
   const handlePlayerStateChange = (state) => {
-    // For non-host listeners in a room, only update the time display
-    // Play/pause state is controlled entirely by the host sync
-    const inRoomAsListener = stateRef.current.activeRoom && !stateRef.current.isHost;
-
     if (state === 1) { // PLAYING
       isLoadingSongRef.current = false;
       setIsBuffering(false);
-      if (!inRoomAsListener) {
-        setIsPlaying(true);
-      }
+      setIsPlaying(true);
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => {
         if (playerRef.current && playerRef.current.getCurrentTime) {
@@ -712,14 +488,10 @@ export default function App() {
     } else if (state === 2) { // PAUSED
       // Ignore transient PAUSED events fired by YouTube while loading a new video
       if (isLoadingSongRef.current) return;
-      // If listener in room, don't set pause — host controls playback
-      if (inRoomAsListener) return;
       setIsPlaying(false);
       if (timerRef.current) clearInterval(timerRef.current);
     } else if (state === 0) { // ENDED
       isLoadingSongRef.current = false;
-      // If listener in room, let host handle next song
-      if (inRoomAsListener) return;
       setIsPlaying(false);
       if (timerRef.current) clearInterval(timerRef.current);
       
@@ -733,40 +505,35 @@ export default function App() {
       }
     } else if (state === 3) { // BUFFERING
       setIsBuffering(true);
-    } else if (state === 5) { // CUED
-      if (stateRef.current.activeRoom && socketRef.current) {
-        socketRef.current.emit('player_ready');
-      }
     }
   };
 
   // Playback control effects
   useEffect(() => {
-    const inRoomAsListener = activeRoom && !isHost;
-    // If listener in room, do NOT auto-play here — playback_update socket event handles this
-    if (inRoomAsListener) return;
-
     if (currentSong && isPlayerReady && playerRef.current && playerRef.current.loadVideoById) {
       isLoadingSongRef.current = true;
       setIsBuffering(true);
       setCurrentTime(0);
       setDuration(0);
       
-      if (isHost && activeRoom) {
-        // Host in a room: tell server to orchestrate playback sync
-        if (socketRef.current) {
-          socketRef.current.emit('prepare_song', { song: currentSong });
-        }
+      if (isNativeAndroid() && currentSong.streamUrl) {
+        nativeMedia.playTrack(currentSong);
       } else {
-        // Normal solo playback
         playerRef.current.loadVideoById(currentSong.id);
-        setIsPlaying(true);
       }
+      setIsPlaying(true);
       addToQueueSilent(currentSong);
     }
-  }, [currentSong, isPlayerReady, activeRoom, isHost]);
+  }, [currentSong, isPlayerReady]);
 
   useEffect(() => {
+    if (isNativeAndroid() && currentSong?.streamUrl) {
+      if (isPlaying) {
+        nativeMedia.resume();
+      } else {
+        nativeMedia.pause();
+      }
+    }
     if (playerRef.current && playerRef.current.playVideo && playerRef.current.pauseVideo) {
       if (isPlaying) {
         playerRef.current.playVideo();
@@ -861,12 +628,6 @@ export default function App() {
 
   // Queue Operations
   const playSong = (song) => {
-    // If in a room and NOT the host, send request to host instead of playing locally
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    if (currentRoom && !currentIsHost && socketRef.current) {
-      socketRef.current.emit('request_song', { song, displayName });
-      return;
-    }
     setCurrentSong(song);
     setIsBuffering(true);
     
@@ -885,11 +646,6 @@ export default function App() {
 
   // Play a song from a list/section and queue all remaining songs as "Up Next"
   const playSongFromList = (song, allSongs) => {
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    if (currentRoom && !currentIsHost && socketRef.current) {
-      socketRef.current.emit('request_song', { song, displayName });
-      return;
-    }
     const songIdx = allSongs.findIndex(s => s.id === song.id);
     // Build queue: all songs starting from the tapped one
     const newQueue = songIdx !== -1 ? allSongs.slice(songIdx) : [song, ...allSongs.filter(s => s.id !== song.id)];
@@ -908,16 +664,10 @@ export default function App() {
   };
 
   const appendToQueue = (song) => {
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    if (currentRoom && !currentIsHost) return;
-
     setQueue(prev => [...prev, song]);
   };
 
   const removeFromQueue = (songId) => {
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    if (currentRoom && !currentIsHost) return;
-
     setQueue(prev => prev.filter(s => s.id !== songId));
     if (currentSong?.id === songId) {
       playNext();
@@ -925,9 +675,6 @@ export default function App() {
   };
 
   const clearQueue = () => {
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    if (currentRoom && !currentIsHost) return;
-    
     setQueue([]);
     setCurrentSong(null);
     setIsPlaying(false);
@@ -937,18 +684,8 @@ export default function App() {
   };
 
   const playNext = () => {
-    const { queue: currentQueue, currentSong: activeSong, repeat: currentRepeat, activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
+    const { queue: currentQueue, currentSong: activeSong, repeat: currentRepeat } = stateRef.current;
     if (currentQueue.length === 0) return;
-    
-    // Listeners should request to play next
-    if (currentRoom && !currentIsHost) {
-      // Find the next song they want to request
-      const currentIdx = currentQueue.findIndex(s => s.id === activeSong?.id);
-      if (currentIdx !== -1 && currentIdx < currentQueue.length - 1) {
-        playSong(currentQueue[currentIdx + 1]);
-      }
-      return;
-    }
 
     const currentIdx = currentQueue.findIndex(s => s.id === activeSong?.id);
     if (currentIdx === -1) {
@@ -965,16 +702,8 @@ export default function App() {
   };
 
   const playPrevious = () => {
-    const { queue: currentQueue, currentSong: activeSong, activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
+    const { queue: currentQueue, currentSong: activeSong } = stateRef.current;
     if (currentQueue.length === 0) return;
-
-    if (currentRoom && !currentIsHost) {
-      const currentIdx = currentQueue.findIndex(s => s.id === activeSong?.id);
-      if (currentIdx > 0) {
-        playSong(currentQueue[currentIdx - 1]);
-      }
-      return;
-    }
 
     if (playerRef.current && playerRef.current.getCurrentTime && playerRef.current.getCurrentTime() > 3) {
       playerRef.current.seekTo(0);
@@ -991,9 +720,6 @@ export default function App() {
   };
 
   const handleShuffleToggle = () => {
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    if (currentRoom && !currentIsHost) return;
-
     if (!shuffle) {
       setOriginalQueue([...queue]);
       if (queue.length > 1) {
@@ -1016,9 +742,6 @@ export default function App() {
   };
 
   const toggleRepeat = () => {
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    if (currentRoom && !currentIsHost) return;
-
     setRepeat(prev => {
       if (prev === 'off') return 'all';
       if (prev === 'all') return 'one';
@@ -1037,6 +760,15 @@ export default function App() {
     }
     setFavorites(newFavs);
     localStorage.setItem('listenup_favorites', JSON.stringify(newFavs));
+
+    // Persist to Native Room DB on Android
+    if (isNativeAndroid()) {
+      if (isAlreadyFav) {
+        nativeStorage.removeFavorite(song.id);
+      } else {
+        nativeStorage.saveFavorite(song);
+      }
+    }
 
     // Cloud sync if authenticated
     if (user?.id && isSupabaseConfigured) {
@@ -1073,6 +805,9 @@ export default function App() {
       songs: []
     };
     setPlaylists(prev => [...prev, newPlaylist]);
+    if (isNativeAndroid()) {
+      nativeStorage.savePlaylist(newPlaylist);
+    }
 
     if (user?.id && isSupabaseConfigured) {
       try {
@@ -1096,6 +831,9 @@ export default function App() {
 
   const deletePlaylist = async (playlistId) => {
     setPlaylists(prev => prev.filter(pl => pl.id !== playlistId));
+    if (isNativeAndroid()) {
+      nativeStorage.deletePlaylist(playlistId);
+    }
     if (activePlaylistId === playlistId) {
       setActivePlaylistId(null);
     }
@@ -1163,13 +901,6 @@ export default function App() {
 
   const playPlaylist = (playlist) => {
     if (!playlist || playlist.songs.length === 0) return;
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    
-    // If listener in room, just request the first song (or we could block it)
-    if (currentRoom && !currentIsHost && socketRef.current) {
-      socketRef.current.emit('request_song', { song: playlist.songs[0], displayName });
-      return;
-    }
 
     setQueue(playlist.songs);
     if (shuffle) {
@@ -1205,15 +936,10 @@ export default function App() {
 
     setSearchLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/search?q=${encodeURIComponent(searchQuery)}`);
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setSearchResults(data);
-      } else {
-        setSearchResults([]);
-      }
+      const data = await searchSongs(searchQuery);
+      setSearchResults(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error(err);
+      console.error('Search error:', err);
       setSearchResults([]);
     } finally {
       setSearchLoading(false);
@@ -1222,11 +948,11 @@ export default function App() {
 
   // Seek bar action
   const handleSeekChange = (e) => {
-    const { activeRoom: currentRoom, isHost: currentIsHost } = stateRef.current;
-    if (currentRoom && !currentIsHost) return; // Listeners cannot seek
-    
     const newTime = parseFloat(e.target.value);
-    if (playerRef.current && playerRef.current.seekTo) {
+    if (isNativeAndroid() && currentSong?.streamUrl) {
+      nativeMedia.seekTo(newTime);
+      setCurrentTime(newTime);
+    } else if (playerRef.current && playerRef.current.seekTo) {
       playerRef.current.seekTo(newTime, true);
     }
   };
@@ -1313,8 +1039,7 @@ export default function App() {
     setSearchQuery(tag);
     setActiveTab('search');
     setSearchLoading(true);
-    fetch(`${API_BASE_URL}/api/search?q=${encodeURIComponent(tag)}`)
-      .then(res => res.json())
+    searchSongs(tag)
       .then(data => {
         setSearchResults(Array.isArray(data) ? data : []);
       })
@@ -1448,16 +1173,6 @@ export default function App() {
                 </svg>
               ),
               badge: playlists.length > 0 ? playlists.length : null
-            },
-            {
-              id: 'rooms',
-              label: 'Music Rooms',
-              icon: (
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-5 h-5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-                </svg>
-              ),
-              badge: activeRoom ? 'LIVE' : null
             },
             {
               id: 'queue',
@@ -1638,7 +1353,7 @@ export default function App() {
                     {getGreeting()}
                   </p>
                   <h2 className="font-heading text-lg md:text-2xl font-extrabold text-[#F5F5F7] tracking-tight flex items-center">
-                    {user ? (profile?.display_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Listener') : (displayName ? displayName.replace(/^Listener-/, '') : 'Guest')}
+                    {user ? (profile?.display_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Listener') : 'Guest'}
                     <span className="text-[#D5F36A] text-xl font-bold ml-0.5">.</span>
                   </h2>
                 </div>
@@ -1665,26 +1380,8 @@ export default function App() {
                     <div className="absolute right-0 mt-2 w-72 p-4 rounded-2xl bg-[#191922] border border-white/[0.08] shadow-2xl z-50">
                       <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/[0.06]">
                         <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">Notifications</h4>
-                        <span className="text-[10px] text-[#D5F36A] font-semibold">{pendingSongRequests.length} pending</span>
                       </div>
-                      {pendingSongRequests.length > 0 ? (
-                        <div className="space-y-2 max-h-48 overflow-y-auto">
-                          {pendingSongRequests.map(r => (
-                            <div key={r.id} className="text-xs text-slate-300 p-2 rounded-lg bg-white/[0.03] border border-white/[0.04]">
-                              <p className="font-semibold text-white truncate">{r.song.title}</p>
-                              <p className="text-[10px] text-[#D5F36A]">from {r.requestedBy}</p>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-[#9999A6] py-3 text-center">No new notifications. All quiet!</p>
-                      )}
-                      {activeRoom && (
-                        <div className="mt-2 pt-2 border-t border-white/[0.06] flex items-center justify-between text-xs">
-                          <span className="text-[#9999A6]">Live Room:</span>
-                          <span className="text-[#D5F36A] font-mono font-bold">{activeRoom}</span>
-                        </div>
-                      )}
+                      <p className="text-xs text-[#9999A6] py-3 text-center">No new notifications. All quiet!</p>
                     </div>
                   )}
                 </div>
@@ -1747,7 +1444,8 @@ export default function App() {
                           setActiveTab('search');
                           handleQuickTagClick('audiobook full playlist');
                         } else if (tab.id === 'live') {
-                          setActiveTab('rooms');
+                          setActiveTab('search');
+                          handleQuickTagClick('live acoustic concert performance');
                         }
                       }}
                       className={`px-5 py-2 rounded-2xl text-xs md:text-sm font-bold transition-all flex-shrink-0 cursor-pointer ${
@@ -3141,297 +2839,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Active View: MUSIC ROOMS */}
-        {activeTab === 'rooms' && (
-          <div className="flex flex-col gap-8 max-w-5xl mx-auto w-full">
-            {!activeRoom ? (
-              <>
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="font-display text-3xl md:text-4xl font-extrabold text-[#F5F5F7] tracking-tight">
-                      Collaborative Music Rooms
-                    </h2>
-                    <p className="text-[#9999A6] text-sm mt-1">Host or join synchronized listening sessions with friends in real-time.</p>
-                  </div>
-
-                  {/* Display Name Input */}
-                  <div className="flex items-center gap-2 self-start md:self-auto bg-[#101017] px-3.5 py-2 rounded-2xl border border-white/[0.08]">
-                    <span className="text-xs font-semibold text-[#9999A6] uppercase tracking-wider">Your Name:</span>
-                    <input
-                      type="text"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      className="bg-transparent text-sm text-[#D5F36A] font-bold focus:outline-none w-32 border-b border-white/[0.1] pb-0.5"
-                    />
-                  </div>
-                </div>
-
-                {roomError && (
-                  <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 px-4 py-3 rounded-2xl text-sm font-medium">
-                    {roomError}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Create Room Card */}
-                  <div className="bg-[#101017] rounded-3xl p-6 border border-white/[0.08] flex flex-col justify-between gap-4">
-                    <div>
-                      <div className="w-10 h-10 rounded-xl bg-[#D5F36A]/10 border border-[#D5F36A]/20 flex items-center justify-center text-[#D5F36A] mb-3">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-5 h-5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                        </svg>
-                      </div>
-                      <h3 className="font-heading text-lg font-bold text-[#F5F5F7]">Create Music Room</h3>
-                      <p className="text-[#9999A6] text-xs mt-1">Host a session and control playback for all connected listeners.</p>
-                    </div>
-
-                    {!roomCreated ? (
-                      <div className="space-y-4">
-                        <div>
-                          <label className="text-[10px] text-[#9999A6] uppercase tracking-widest font-bold">Room Name</label>
-                          <input
-                            type="text"
-                            value={newRoomName}
-                            onChange={(e) => setNewRoomName(e.target.value)}
-                            placeholder="Late Night Beats, Chill Vibe"
-                            className="w-full bg-[#191922] border border-white/[0.08] focus:border-[#D5F36A] text-[#F5F5F7] px-4 py-2.5 rounded-xl text-sm mt-1 focus:outline-none"
-                          />
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] text-[#9999A6] uppercase tracking-widest font-bold">Visibility</label>
-                          <div className="flex items-center gap-1.5 p-1 rounded-xl bg-white/[0.04] border border-white/[0.06]">
-                            <button
-                              onClick={() => setRoomVisibility('public')}
-                              className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${roomVisibility === 'public' ? 'bg-[#D5F36A] text-black font-extrabold' : 'text-[#9999A6] hover:text-[#F5F5F7]'}`}
-                            >Public</button>
-                            <button
-                              onClick={() => setRoomVisibility('private')}
-                              className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${roomVisibility === 'private' ? 'bg-[#D5F36A] text-black font-extrabold' : 'text-[#9999A6] hover:text-[#F5F5F7]'}`}
-                            >Private</button>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={handleCreateRoom}
-                          disabled={!newRoomName.trim()}
-                          className="w-full bg-[#D5F36A] hover:bg-[#BDE84A] text-black font-extrabold py-3 rounded-xl shadow-md shadow-[#D5F36A]/20 active:scale-[0.98] transition-all disabled:opacity-40 text-sm cursor-pointer"
-                        >
-                          Launch Room
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className="p-4 rounded-2xl bg-[#D5F36A]/10 border border-[#D5F36A]/20 text-center">
-                          <p className="text-[10px] text-[#D5F36A] uppercase tracking-widest font-bold">Your Room Code</p>
-                          <p className="font-mono text-2xl font-black text-[#F5F5F7] mt-1 tracking-wider">{roomCode}</p>
-                        </div>
-
-                        <button
-                          onClick={() => copyToClipboard(roomCode, 'code')}
-                          className="w-full bg-[#191922] border border-white/[0.08] hover:border-white/20 text-[#F5F5F7] font-semibold py-2.5 rounded-xl text-xs cursor-pointer"
-                        >
-                          {copiedCode ? '✓ Copied Room Code' : 'Copy Room Code'}
-                        </button>
-
-                        <button
-                          onClick={() => copyToClipboard(window.location.origin + '/room/' + roomCode, 'link')}
-                          className="w-full bg-[#191922] border border-white/[0.08] hover:border-white/20 text-[#F5F5F7] font-semibold py-2.5 rounded-xl text-xs cursor-pointer"
-                        >
-                          {copiedLink ? '✓ Copied Invite Link' : 'Copy Invitation Link'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Join Room Card */}
-                  <div className="bg-[#101017] rounded-3xl p-6 border border-white/[0.08] flex flex-col justify-between gap-4">
-                    <div>
-                      <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 mb-3">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-5 h-5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-                        </svg>
-                      </div>
-                      <h3 className="font-heading text-lg font-bold text-[#F5F5F7]">Join by Code</h3>
-                      <p className="text-[#9999A6] text-xs mt-1">Enter a unique room code from a friend to sync playback.</p>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div>
-                        <label className="text-[10px] text-[#9999A6] uppercase tracking-widest font-bold">Room Code</label>
-                        <input
-                          type="text"
-                          value={joinRoomCode}
-                          onChange={(e) => setJoinRoomCode(e.target.value.toUpperCase())}
-                          placeholder="MZK-4839"
-                          className="w-full bg-[#191922] border border-white/[0.08] focus:border-[#D5F36A] px-4 py-3 rounded-xl text-base font-mono font-bold text-center tracking-widest mt-1 text-[#F5F5F7] focus:outline-none"
-                        />
-                      </div>
-
-                      <button
-                        onClick={handleJoinRoom}
-                        disabled={!joinRoomCode.trim()}
-                        className="w-full bg-[#F5F5F7] hover:bg-white text-black font-extrabold py-3 rounded-xl shadow-md active:scale-[0.98] transition-all disabled:opacity-40 text-sm cursor-pointer"
-                      >
-                        Join Room
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Public Rooms List */}
-                  <div className="bg-[#101017] rounded-3xl p-6 border border-white/[0.08] flex flex-col justify-between gap-4">
-                    <div>
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="w-10 h-10 rounded-xl bg-[#D5F36A]/10 border border-[#D5F36A]/20 flex items-center justify-center text-[#D5F36A]">
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-5 h-5">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
-                          </svg>
-                        </div>
-                        <span className="text-[10px] font-mono text-[#D5F36A] font-bold bg-[#D5F36A]/10 border border-[#D5F36A]/20 px-2 py-0.5 rounded-full">
-                          Live Network
-                        </span>
-                      </div>
-                      <h3 className="font-heading text-lg font-bold text-[#F5F5F7]">Public Sessions</h3>
-                      <p className="text-[#9999A6] text-xs mt-1">Drop into active rooms hosted across the network.</p>
-                    </div>
-
-                    {publicRooms.length === 0 ? (
-                      <div className="py-8 text-center text-[#666674] text-xs">
-                        No public sessions right now. Be the first to start one!
-                      </div>
-                    ) : (
-                      <div className="space-y-2 overflow-y-auto max-h-48 custom-scrollbar">
-                        {publicRooms.map((room) => (
-                          <div key={room.code} className="p-3 rounded-2xl bg-[#191922] border border-white/[0.06] flex items-center justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-semibold text-[#F5F5F7] truncate">{room.name}</p>
-                              <p className="text-[11px] text-[#9999A6] truncate">{room.listenerCount} listening · {room.host}</p>
-                            </div>
-                            <button
-                              onClick={() => {
-                                setJoinRoomCode(room.code);
-                                socketRef.current?.emit('join_room_request', { roomCode: room.code, displayName });
-                              }}
-                              className="px-3.5 py-1.5 rounded-xl bg-[#D5F36A] text-black font-extrabold text-xs hover:bg-[#BDE84A] transition-colors cursor-pointer"
-                            >
-                              Join
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </>
-            ) : (
-              /* Active Room Experience */
-              <div className="space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 bg-[#101017] rounded-3xl border border-white/[0.08]">
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="font-display text-2xl md:text-3xl font-extrabold text-[#F5F5F7]">{activeRoom.name}</h2>
-                      <span className="bg-[#D5F36A]/10 text-[#D5F36A] text-xs px-2.5 py-1 rounded-full font-bold border border-[#D5F36A]/20 flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#D5F36A] animate-pulse"></span>
-                        LIVE SYNC
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-4 mt-2 text-xs text-[#9999A6]">
-                      <span className="font-mono bg-white/[0.06] px-2 py-0.5 rounded text-[#F5F5F7] font-bold">{roomCode}</span>
-                      <span>{roomParticipants.length} Connected</span>
-                      {isHost && <span className="text-[#D5F36A] font-semibold">★ Room Host</span>}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => copyToClipboard(roomCode, 'code')}
-                      className="px-3 py-2 text-xs font-semibold text-[#F5F5F7] bg-[#191922] border border-white/[0.08] rounded-xl hover:border-white/20 transition-all cursor-pointer"
-                    >
-                      {copiedCode ? '✓ Copied' : 'Copy Code'}
-                    </button>
-                    <button
-                      onClick={handleLeaveRoom}
-                      className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 rounded-xl transition-all shadow-md shadow-rose-600/20 cursor-pointer"
-                    >
-                      Leave Room
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Current Synchronized Track */}
-                  <div className="lg:col-span-2 bg-[#101017] rounded-3xl p-6 border border-white/[0.08]">
-                    <span className="text-[10px] text-[#D5F36A] uppercase tracking-widest font-mono font-bold">Synchronized Playback</span>
-                    {currentSong ? (
-                      <div className="flex items-center gap-5 mt-4">
-                        <img src={currentSong.thumbnailUrl} alt={currentSong.title} className="w-24 h-24 rounded-2xl object-cover border border-white/[0.08] shadow-md" />
-                        <div className="flex-1 min-w-0">
-                          <h4 className="font-heading text-lg font-bold text-[#F5F5F7] truncate">{currentSong.title}</h4>
-                          <p className="text-xs text-[#9999A6] truncate mt-0.5">{currentSong.artist}</p>
-                          <div className="flex items-center gap-2 mt-3">
-                            <span className="w-1 h-3 rounded-full bg-[#D5F36A] animate-pulse"></span>
-                            <span className="w-1 h-5 rounded-full bg-[#D5F36A] animate-pulse delay-75"></span>
-                            <span className="w-1 h-2 rounded-full bg-[#D5F36A] animate-pulse delay-150"></span>
-                            <span className="w-1 h-4 rounded-full bg-[#D5F36A] animate-pulse delay-100"></span>
-                            <span className="text-xs text-[#D5F36A] font-semibold ml-2">
-                              {isPlaying ? 'Playing to all listeners' : 'Paused'}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="py-12 text-center text-[#666674] text-sm">
-                        Waiting for host to pick a track...
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Connected Listeners */}
-                  <div className="bg-[#101017] rounded-3xl p-6 border border-white/[0.08]">
-                    <h3 className="font-heading text-sm font-bold text-[#F5F5F7] uppercase tracking-wider mb-3">
-                      Listeners ({roomParticipants.length})
-                    </h3>
-                    <div className="space-y-2 overflow-y-auto max-h-48 custom-scrollbar">
-                      {roomParticipants.map((p, idx) => (
-                        <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-white/[0.02]">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-7 h-7 rounded-full bg-[#D5F36A]/20 border border-[#D5F36A]/30 flex items-center justify-center text-[#D5F36A] text-xs font-bold">
-                              {p.displayName?.charAt(0)?.toUpperCase() || '?'}
-                            </div>
-                            <span className="text-sm font-medium text-[#F5F5F7] truncate">{p.displayName}</span>
-                          </div>
-                          {p.isHost && (
-                            <span className="text-[10px] bg-[#D5F36A]/10 text-[#D5F36A] border border-[#D5F36A]/20 px-2 py-0.5 rounded-full font-bold">
-                              Host
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Activity Feed */}
-                <div className="bg-[#101017] rounded-3xl p-6 border border-white/[0.08]">
-                  <h3 className="font-heading text-sm font-bold text-[#F5F5F7] uppercase tracking-wider mb-3">Live Room Activity</h3>
-                  {roomActivity.length === 0 ? (
-                    <p className="text-[#666674] text-xs">Live events, joins, and track changes will appear here.</p>
-                  ) : (
-                    <div className="space-y-2 overflow-y-auto max-h-36 custom-scrollbar">
-                      {roomActivity.slice().reverse().map((act, i) => (
-                        <div key={i} className="flex items-center gap-3 text-xs text-[#9999A6] py-1 border-b border-white/[0.03]">
-                          <span className="font-mono text-[#666674]">{new Date(act.timestamp).toLocaleTimeString()}</span>
-                          <span className="text-[#F5F5F7]">{act.message}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Active View: QUEUE */}
         {activeTab === 'queue' && (() => {
           const currentIdx = queue.findIndex(s => s.id === currentSong?.id);
@@ -3714,10 +3121,6 @@ export default function App() {
                   playFeaturedMix();
                   return;
                 }
-                if (activeRoom && !isHost && socketRef.current) {
-                  socketRef.current.emit('request_playback', { isPlaying: !isPlaying, displayName });
-                  return;
-                }
                 setIsPlaying(!isPlaying);
               }}
               className="w-10 h-10 md:w-11 md:h-11 rounded-full bg-[#D5F36A] hover:bg-[#BDE84A] text-black flex items-center justify-center shadow-[0_0_20px_rgba(213,243,106,0.35)] active:scale-90 transition-all flex-shrink-0 cursor-pointer"
@@ -3828,16 +3231,7 @@ export default function App() {
               </svg>
             )
           },
-          {
-            id: 'rooms',
-            label: 'Rooms',
-            icon: (
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-              </svg>
-            ),
-            badge: activeRoom ? 'LIVE' : null
-          },
+
           {
             id: 'profile',
             label: 'Profile',
@@ -3853,7 +3247,6 @@ export default function App() {
           const isActive = (item.id === 'home' && activeTab === 'home') ||
                            (item.id === 'search' && activeTab === 'search') ||
                            (item.id === 'playlists' && (activeTab === 'playlists' || activeTab === 'favorites')) ||
-                           (item.id === 'rooms' && activeTab === 'rooms') ||
                            (item.id === 'profile' && isProfileModalOpen);
           return (
             <button
@@ -4017,45 +3410,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Song Request Notifications (Host Only) */}
-      {pendingSongRequests.length > 0 && isHost && (
-        <div className="fixed bottom-24 right-6 z-50 flex flex-col gap-3 max-w-sm w-full">
-          {pendingSongRequests.map((req) => (
-            <div key={req.id} className="bg-[#191922] border border-[#D5F36A]/30 rounded-2xl p-4 shadow-2xl">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="w-2 h-2 rounded-full bg-[#D5F36A] animate-ping"></span>
-                <span className="text-xs text-[#D5F36A] font-bold uppercase tracking-wider font-mono">Incoming Song Request</span>
-              </div>
-              <div className="flex items-center gap-3 mb-3">
-                <img
-                  src={req.song.thumbnailUrl}
-                  alt={req.song.title}
-                  className="w-12 h-12 rounded-xl object-cover border border-white/[0.08]"
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-[#F5F5F7] truncate font-heading">{req.song.title}</p>
-                  <p className="text-xs text-[#9999A6] truncate">Requested by <span className="text-[#D5F36A] font-semibold">{req.requestedBy}</span></p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleAcceptSongRequest(req)}
-                  className="flex-1 px-3 py-2 text-xs font-extrabold text-black bg-[#D5F36A] hover:bg-[#BDE84A] rounded-xl transition-all cursor-pointer"
-                >
-                  ✓ Accept
-                </button>
-                <button
-                  onClick={() => handleDeclineSongRequest(req)}
-                  className="flex-1 px-3 py-2 text-xs font-semibold text-[#F5F5F7] bg-white/[0.06] hover:bg-white/[0.12] rounded-xl transition-all cursor-pointer"
-                >
-                  ✕ Decline
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* Premium Now Playing Fullscreen Screen with Animated Circular Visualizer */}
       <NowPlayingScreen
         isOpen={isNowPlayingOpen}
@@ -4068,10 +3422,6 @@ export default function App() {
         onPlayPause={() => {
           if (!currentSong) {
             playFeaturedMix();
-            return;
-          }
-          if (activeRoom && !isHost && socketRef.current) {
-            socketRef.current.emit('request_playback', { isPlaying: !isPlaying, displayName });
             return;
           }
           setIsPlaying(!isPlaying);
@@ -4088,7 +3438,6 @@ export default function App() {
         onToggleFavorite={toggleFavorite}
         queue={queue}
         onPlayFromQueue={(song) => playSong(song)}
-        activeRoom={activeRoom}
         volume={volume}
         isMuted={isMuted}
         onVolumeChange={(val) => {

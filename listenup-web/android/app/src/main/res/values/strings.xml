@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ListenUp</string>
+    <string name="title_activity_main">ListenUp</string>
+    <string name="package_name">com.listenup.app</string>
+    <string name="custom_url_scheme">com.listenup.app</string>
+</resources>

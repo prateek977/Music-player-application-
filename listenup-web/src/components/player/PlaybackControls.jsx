@@ -143,7 +143,7 @@ export default function PlaybackControls({
           )}
         </button>
 
-        {/* Ambient Room / Quality Info */}
+        {/* Ambient Quality Info */}
         <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-[#666674] font-mono">
           <span className="w-1.5 h-1.5 rounded-full bg-[#D5F36A] animate-pulse" />
           <span>High Fidelity • 48kHz</span>
