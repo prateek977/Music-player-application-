@@ -334,6 +334,10 @@ public class ListenUpSearchPlugin extends Plugin {
                     song.put("thumbnailUrl", thumbnail);
                     song.put("duration", durationSeconds);
                     song.put("viewCount", viewCount);
+                    song.put("playbackType", "youtube");
+                    song.put("isDirectStream", false);
+                    song.put("isPreview", false);
+                    song.put("isFullLength", true);
 
                     results.put(song);
                     if (results.length() >= limit) {

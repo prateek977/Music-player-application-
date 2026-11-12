@@ -37,7 +37,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.listenup.app.MainActivity;
-import com.listenup.app.R;
 
 import java.util.List;
 
@@ -54,20 +53,6 @@ public class ListenUpMediaService extends MediaSessionService {
 
     private ExoPlayer player;
     private MediaSession mediaSession;
-    private boolean isBecomingNoisyRegistered = false;
-
-    // Headphone / Bluetooth disconnect receiver
-    private final BroadcastReceiver becomingNoisyReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
-                Log.d(TAG, "Audio becoming noisy (headphones disconnected), pausing playback");
-                if (player != null && player.isPlaying()) {
-                    player.pause();
-                }
-            }
-        }
-    };
 
     @Override
     public void onCreate() {
@@ -110,9 +95,6 @@ public class ListenUpMediaService extends MediaSessionService {
                 .build();
         setMediaNotificationProvider(notificationProvider);
 
-        // 6. Register noisy receiver
-        registerNoisyReceiver();
-
         Log.i(TAG, "ListenUpMediaService created with ExoPlayer & MediaSession");
     }
 
@@ -134,21 +116,21 @@ public class ListenUpMediaService extends MediaSessionService {
         }
     }
 
-    private void registerNoisyReceiver() {
-        if (!isBecomingNoisyRegistered) {
-            IntentFilter filter = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
-            registerReceiver(becomingNoisyReceiver, filter);
-            isBecomingNoisyRegistered = true;
-        }
+    public static final String ACTION_NEXT_TRACK = "com.listenup.app.ACTION_NEXT_TRACK";
+    public static final String ACTION_PREV_TRACK = "com.listenup.app.ACTION_PREV_TRACK";
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        super.onStartCommand(intent, flags, startId);
+        return START_STICKY;
     }
 
-    private void unregisterNoisyReceiver() {
-        if (isBecomingNoisyRegistered) {
-            try {
-                unregisterReceiver(becomingNoisyReceiver);
-            } catch (Exception ignored) {}
-            isBecomingNoisyRegistered = false;
+    @Override
+    public void onTaskRemoved(@Nullable Intent rootIntent) {
+        if (player == null || !player.getPlayWhenReady() || player.getPlaybackState() == Player.STATE_IDLE || player.getPlaybackState() == Player.STATE_ENDED) {
+            stopSelf();
         }
+        super.onTaskRemoved(rootIntent);
     }
 
     @Nullable
@@ -160,7 +142,6 @@ public class ListenUpMediaService extends MediaSessionService {
     @Override
     public void onDestroy() {
         Log.i(TAG, "Destroying ListenUpMediaService");
-        unregisterNoisyReceiver();
 
         if (player != null) {
             player.stop();
@@ -179,16 +160,68 @@ public class ListenUpMediaService extends MediaSessionService {
     /**
      * Custom session callback handling command permissions and transport commands
      */
-    private static class CustomMediaSessionCallback implements MediaSession.Callback {
+    private class CustomMediaSessionCallback implements MediaSession.Callback {
         @NonNull
         @Override
         public MediaSession.ConnectionResult onConnect(
                 @NonNull MediaSession session,
                 @NonNull MediaSession.ControllerInfo controller) {
-            // Allow all player commands for connected controller
+            // Allow all player commands for connected controller including transport controls
+            Player.Commands availableCommands = session.getPlayer().getAvailableCommands().buildUpon()
+                    .add(Player.COMMAND_PLAY_PAUSE)
+                    .add(Player.COMMAND_PREPARE)
+                    .add(Player.COMMAND_STOP)
+                    .add(Player.COMMAND_SET_MEDIA_ITEM)
+                    .add(Player.COMMAND_CHANGE_MEDIA_ITEMS)
+                    .add(Player.COMMAND_SET_PLAYLIST_METADATA)
+                    .add(Player.COMMAND_SEEK_TO_NEXT)
+                    .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                    .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                    .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                    .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                    .build();
+
             MediaSession.ConnectionResult.AcceptedResultBuilder builder =
                     new MediaSession.ConnectionResult.AcceptedResultBuilder(session);
+            builder.setAvailablePlayerCommands(availableCommands);
             return builder.build();
+        }
+
+        @NonNull
+        @Override
+        public ListenableFuture<List<MediaItem>> onAddMediaItems(
+                @NonNull MediaSession session,
+                @NonNull MediaSession.ControllerInfo controller,
+                @NonNull List<MediaItem> mediaItems) {
+            return Futures.immediateFuture(mediaItems);
+        }
+
+        @NonNull
+        @Override
+        public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onSetMediaItems(
+                @NonNull MediaSession session,
+                @NonNull MediaSession.ControllerInfo controller,
+                @NonNull List<MediaItem> mediaItems,
+                int startIndex,
+                long startPositionMs) {
+            return Futures.immediateFuture(new MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs));
+        }
+
+        @Override
+        public int onPlayerCommandRequest(
+                @NonNull MediaSession session,
+                @NonNull MediaSession.ControllerInfo controller,
+                int playerCommand) {
+            if (playerCommand == Player.COMMAND_SEEK_TO_NEXT || playerCommand == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) {
+                Intent intent = new Intent(ACTION_NEXT_TRACK);
+                intent.setPackage(getPackageName());
+                sendBroadcast(intent);
+            } else if (playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS || playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) {
+                Intent intent = new Intent(ACTION_PREV_TRACK);
+                intent.setPackage(getPackageName());
+                sendBroadcast(intent);
+            }
+            return MediaSession.Callback.super.onPlayerCommandRequest(session, controller, playerCommand);
         }
     }
 }

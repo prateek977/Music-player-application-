@@ -1,4 +1,4 @@
-import { Capacitor } from '@capacitor/core';
+import { registerPlugin, Capacitor } from '@capacitor/core';
 
 /**
  * Native Media Bridge
@@ -6,8 +6,8 @@ import { Capacitor } from '@capacitor/core';
  * AndroidX Media3 / ExoPlayer Foreground MediaSessionService and Room SQLite DB.
  */
 
-const ListenUpMedia = Capacitor.Plugins.ListenUpMedia;
-const ListenUpStorage = Capacitor.Plugins.ListenUpStorage;
+const ListenUpMedia = registerPlugin('ListenUpMedia');
+const ListenUpStorage = registerPlugin('ListenUpStorage');
 
 export const isNativeAndroid = () => {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -28,11 +28,22 @@ export const nativeMedia = {
   },
 
   playTrack: async (track) => {
-    if (!isNativeAndroid() || !ListenUpMedia) return;
+    if (!isNativeAndroid() || !ListenUpMedia || !track) return { success: false, nativePlayback: false };
     try {
-      await ListenUpMedia.playTrack({ track });
+      return await ListenUpMedia.playTrack({ track });
     } catch (e) {
       console.error('Native playTrack failed:', e);
+      return { success: false, nativePlayback: false };
+    }
+  },
+
+  updateMetadata: async (track) => {
+    if (!isNativeAndroid() || !ListenUpMedia || !track) return { success: false };
+    try {
+      return await ListenUpMedia.updateMetadata({ track });
+    } catch (e) {
+      console.warn('Native updateMetadata failed:', e);
+      return { success: false };
     }
   },
 
@@ -112,7 +123,7 @@ export const nativeMedia = {
     if (!isNativeAndroid() || !ListenUpMedia) return null;
     try {
       return await ListenUpMedia.getPlaybackState();
-    } catch (e) {
+    } catch {
       return null;
     }
   },
@@ -131,6 +142,16 @@ export const nativeMedia = {
   addPositionChangeListener: (callback) => {
     if (!isNativeAndroid() || !ListenUpMedia) return { remove: () => {} };
     return ListenUpMedia.addListener('positionChange', callback);
+  },
+
+  addNextTrackListener: (callback) => {
+    if (!isNativeAndroid() || !ListenUpMedia) return { remove: () => {} };
+    return ListenUpMedia.addListener('nextTrackRequested', callback);
+  },
+
+  addPreviousTrackListener: (callback) => {
+    if (!isNativeAndroid() || !ListenUpMedia) return { remove: () => {} };
+    return ListenUpMedia.addListener('previousTrackRequested', callback);
   },
 
   addErrorListener: (callback) => {
@@ -229,7 +250,7 @@ export const nativeStorage = {
     try {
       const res = await ListenUpStorage.getListeningHistory({ limit });
       return res.history || [];
-    } catch (e) {
+    } catch {
       return [];
     }
   }

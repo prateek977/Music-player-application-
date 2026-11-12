@@ -15,7 +15,7 @@ import { NowPlayingScreen } from './components/player';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
 import { nativeMedia, nativeStorage, isNativeAndroid } from './lib/nativeMediaBridge';
 import { rankSongs } from './lib/localRecommender';
-import { searchSongs, browseCategory } from './lib/nativeSearchBridge';
+import { searchSongs, browseCategory, resolveDirectAudioStream, resolveTrackPreview } from './lib/nativeSearchBridge';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -27,6 +27,7 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isGuestMigrationOpen, setIsGuestMigrationOpen] = useState(false);
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
+  const [isResolvingStream, setIsResolvingStream] = useState(false);
   const prevUserRef = useRef(null);
 
   // Navigation & Search State
@@ -193,7 +194,8 @@ export default function App() {
   const timerRef = useRef(null);
   const createPlaylistDialogRef = useRef(null);
   const isLoadingSongRef = useRef(false);
-  const silentAudioRef = useRef(null);
+  const isNativePlaybackRef = useRef(false);
+  const isNativeStateUpdateRef = useRef(false);
   const stateRef = useRef({ currentSong, queue, repeat, isPlaying, shuffle });
 
   // GSAP Animation & UI Refs
@@ -256,25 +258,55 @@ export default function App() {
     // Native Android Background Media3 & Room DB integration
     let nativeCleanup = () => {};
     if (isNativeAndroid()) {
-      nativeMedia.initialize();
+      // Enable background mode with silent settings so it doesn't create duplicate notifications
+      try {
+        BackgroundMode.setSettings({ silent: true }).catch(() => {});
+        BackgroundMode.enable().catch(() => {});
+        BackgroundMode.disableWebViewOptimizations().catch(() => {});
+      } catch (bmErr) {
+        console.warn('BackgroundMode init warning:', bmErr);
+      }
+
+      nativeMedia.initialize().then(() => {
+        nativeMedia.getPlaybackState().then(state => {
+          if (state && state.isPlaying && state.currentTrack) {
+            isNativePlaybackRef.current = true;
+            isNativeStateUpdateRef.current = true;
+            setCurrentSong(state.currentTrack);
+            setIsPlaying(true);
+            if (state.positionMs) setCurrentTime(state.positionMs / 1000);
+            if (state.durationMs) setDuration(state.durationMs / 1000);
+          }
+        }).catch(() => {});
+      }).catch(() => {});
 
       const subState = nativeMedia.addPlaybackStateListener((data) => {
-        if (typeof data.isPlaying === 'boolean') {
-          setIsPlaying(data.isPlaying);
-        }
-        if (data.state === 'BUFFERING') {
-          setIsBuffering(true);
-        } else if (data.state === 'READY') {
-          setIsBuffering(false);
+        // Only react to native playback state changes if native ExoPlayer is the active audio engine
+        if (isNativePlaybackRef.current) {
+          if (typeof data.isPlaying === 'boolean') {
+            isNativeStateUpdateRef.current = true;
+            setIsPlaying(data.isPlaying);
+          }
+          if (data.state === 'BUFFERING') {
+            setIsBuffering(true);
+          } else if (data.state === 'READY') {
+            setIsBuffering(false);
+          } else if (data.state === 'ENDED') {
+            setIsBuffering(false);
+            setIsPlaying(false);
+            playNext();
+          }
         }
       });
 
       const subPos = nativeMedia.addPositionChangeListener((data) => {
-        if (data.positionMs !== undefined) {
-          setCurrentTime(data.positionMs / 1000);
-        }
-        if (data.durationMs !== undefined && data.durationMs > 0) {
-          setDuration(data.durationMs / 1000);
+        if (isNativePlaybackRef.current) {
+          if (data.positionMs !== undefined) {
+            setCurrentTime(data.positionMs / 1000);
+          }
+          if (data.durationMs !== undefined && data.durationMs > 0) {
+            setDuration(data.durationMs / 1000);
+          }
         }
       });
 
@@ -282,6 +314,14 @@ export default function App() {
         if (track && track.id) {
           setCurrentSong(prev => (prev?.id === track.id ? prev : { ...prev, ...track }));
         }
+      });
+
+      const subNext = nativeMedia.addNextTrackListener(() => {
+        playNext();
+      });
+
+      const subPrev = nativeMedia.addPreviousTrackListener(() => {
+        playPrevious();
       });
 
       // Hydrate favorites and playlists from Room SQLite
@@ -300,6 +340,8 @@ export default function App() {
         subState.remove();
         subPos.remove();
         subTrack.remove();
+        subNext.remove();
+        subPrev.remove();
       };
     }
 
@@ -474,6 +516,9 @@ export default function App() {
   };
 
   const handlePlayerStateChange = (state) => {
+    // If native ExoPlayer is the active playback engine, ignore YouTube events
+    if (isNativePlaybackRef.current) return;
+
     if (state === 1) { // PLAYING
       isLoadingSongRef.current = false;
       setIsBuffering(false);
@@ -510,16 +555,43 @@ export default function App() {
 
   // Playback control effects
   useEffect(() => {
-    if (currentSong && isPlayerReady && playerRef.current && playerRef.current.loadVideoById) {
+    if (currentSong && isPlayerReady) {
+      if (!currentSong.id && !currentSong.streamUrl) {
+        setIsBuffering(false);
+        setIsPlaying(false);
+        return;
+      }
+
       isLoadingSongRef.current = true;
       setIsBuffering(true);
       setCurrentTime(0);
-      setDuration(0);
+      setDuration(currentSong.isPreview ? 30 : (currentSong.duration || 0));
       
-      if (isNativeAndroid() && currentSong.streamUrl) {
-        nativeMedia.playTrack(currentSong);
+      if (isNativeAndroid()) {
+        if (currentSong.streamUrl) {
+          isNativePlaybackRef.current = true;
+          nativeMedia.playTrack(currentSong);
+          if (queue && queue.length > 0) {
+            const idx = queue.findIndex(s => s.id === currentSong.id);
+            nativeMedia.setQueue(queue, idx !== -1 ? idx : 0, true);
+          }
+          if (playerRef.current && playerRef.current.pauseVideo) {
+            playerRef.current.pauseVideo();
+          }
+        } else {
+          isNativePlaybackRef.current = false;
+          // Set metadata only for Android system MediaSession
+          nativeMedia.updateMetadata(currentSong);
+          // Foreground YouTube IFrame plays the audio
+          if (playerRef.current && playerRef.current.loadVideoById) {
+            playerRef.current.loadVideoById(currentSong.id);
+          }
+        }
       } else {
-        playerRef.current.loadVideoById(currentSong.id);
+        isNativePlaybackRef.current = false;
+        if (playerRef.current && playerRef.current.loadVideoById) {
+          playerRef.current.loadVideoById(currentSong.id);
+        }
       }
       setIsPlaying(true);
       addToQueueSilent(currentSong);
@@ -527,20 +599,28 @@ export default function App() {
   }, [currentSong, isPlayerReady]);
 
   useEffect(() => {
-    if (isNativeAndroid() && currentSong?.streamUrl) {
+    // Only synchronize play/pause if a song has actually been loaded
+    if (!currentSong) return;
+
+    // Guard against re-echoing state changes back to native
+    if (isNativeStateUpdateRef.current) {
+      isNativeStateUpdateRef.current = false;
+      return;
+    }
+
+    if (isNativeAndroid() && isNativePlaybackRef.current) {
       if (isPlaying) {
         nativeMedia.resume();
       } else {
         nativeMedia.pause();
       }
-    }
-    if (playerRef.current && playerRef.current.playVideo && playerRef.current.pauseVideo) {
-      if (isPlaying) {
-        playerRef.current.playVideo();
-        silentAudioRef.current?.play().catch(e => console.log('Silent audio play failed', e));
-      } else {
-        playerRef.current.pauseVideo();
-        silentAudioRef.current?.pause();
+    } else {
+      if (playerRef.current && playerRef.current.playVideo && playerRef.current.pauseVideo) {
+        if (isPlaying) {
+          playerRef.current.playVideo();
+        } else {
+          playerRef.current.pauseVideo();
+        }
       }
     }
   }, [isPlaying]);
@@ -592,39 +672,94 @@ export default function App() {
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
     }
   }, [isPlaying]);
-  // --- Android Background Fixes ---
-  useEffect(() => {
-    // 1. Audio Priming (Unlocking)
-    const unlockAudio = () => {
-      if (silentAudioRef.current) {
-        silentAudioRef.current.play().then(() => {
-          silentAudioRef.current.pause();
-          document.removeEventListener('click', unlockAudio);
-          document.removeEventListener('touchstart', unlockAudio);
-        }).catch(() => {});
-      }
-    };
-    document.addEventListener('click', unlockAudio);
-    document.addEventListener('touchstart', unlockAudio);
 
-    // 2. Visibility Change Override
+  // --- Background Playback Lifecycle & State Recovery ---
+  useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.hidden && stateRef.current.isPlaying) {
-        // Force YouTube to keep playing or play again immediately if Android paused it
-        if (playerRef.current && playerRef.current.playVideo) {
-          playerRef.current.playVideo();
+      if (document.hidden) {
+        // Enforce foreground-only limitation for YouTube tracks:
+        // When the app goes to background, pause YouTube video player cleanly.
+        // For direct audio streams (isNativePlaybackRef.current === true), DO NOT PAUSE!
+        // ExoPlayer foreground service will continue playing seamlessly.
+        if (!isNativePlaybackRef.current && stateRef.current.isPlaying) {
+          if (playerRef.current && playerRef.current.pauseVideo) {
+            playerRef.current.pauseVideo();
+          }
+          setIsPlaying(false);
+        }
+      } else {
+        // App returning to foreground: if native background service was playing, re-sync UI
+        if (isNativeAndroid()) {
+          nativeMedia.getPlaybackState().then(state => {
+            if (state && state.isPlaying && state.currentTrack) {
+              isNativePlaybackRef.current = true;
+              isNativeStateUpdateRef.current = true;
+              setIsPlaying(true);
+              if (state.positionMs) setCurrentTime(state.positionMs / 1000);
+              if (state.durationMs) setDuration(state.durationMs / 1000);
+            }
+          }).catch(() => {});
         }
       }
     };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    return () => {
-      document.removeEventListener('click', unlockAudio);
-      document.removeEventListener('touchstart', unlockAudio);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
-  // --------------------------------
+
+  const switchToBackgroundAudio = async () => {
+    if (!currentSong || currentSong.isPreview || isResolvingStream) return;
+    setIsResolvingStream(true);
+    try {
+      const previewData = await resolveTrackPreview(currentSong);
+      if (previewData && previewData.streamUrl) {
+        const upgradedSong = {
+          ...currentSong,
+          streamUrl: previewData.streamUrl,
+          isDirectStream: true,
+          isPreview: true,
+          isFullLength: false,
+          playbackType: 'preview',
+          fullDuration: currentSong.duration || 0,
+          duration: 30
+        };
+        // Pause YouTube player if active
+        if (playerRef.current && playerRef.current.pauseVideo) {
+          playerRef.current.pauseVideo();
+        }
+        setCurrentSong(upgradedSong);
+        setDuration(30);
+        setCurrentTime(0);
+      } else {
+        alert('A 30-second audio preview sample is not available for this track.');
+      }
+    } catch (e) {
+      console.warn('Failed to resolve direct audio preview:', e);
+    } finally {
+      setIsResolvingStream(false);
+    }
+  };
+
+  const switchToFullSong = () => {
+    if (!currentSong) return;
+    const fullSong = {
+      ...currentSong,
+      streamUrl: null,
+      isDirectStream: false,
+      isPreview: false,
+      isFullLength: true,
+      playbackType: 'youtube',
+      duration: currentSong.fullDuration || currentSong.duration || 0
+    };
+    if (isNativeAndroid() && isNativePlaybackRef.current) {
+      nativeMedia.pause();
+    }
+    isNativePlaybackRef.current = false;
+    setCurrentSong(fullSong);
+    setDuration(fullSong.duration);
+    setCurrentTime(0);
+  };
+
 
   // Queue Operations
   const playSong = (song) => {
@@ -949,9 +1084,9 @@ export default function App() {
   // Seek bar action
   const handleSeekChange = (e) => {
     const newTime = parseFloat(e.target.value);
-    if (isNativeAndroid() && currentSong?.streamUrl) {
+    setCurrentTime(newTime);
+    if (isNativeAndroid() && isNativePlaybackRef.current) {
       nativeMedia.seekTo(newTime);
-      setCurrentTime(newTime);
     } else if (playerRef.current && playerRef.current.seekTo) {
       playerRef.current.seekTo(newTime, true);
     }
@@ -1227,7 +1362,6 @@ export default function App() {
           {/* Hidden YouTube Container */}
           <div className="absolute top-[-9999px] left-[-9999px] opacity-0 pointer-events-none w-[1px] h-[1px] overflow-hidden">
             <div id="yt-player-iframe"></div>
-            <audio ref={silentAudioRef} loop src="data:audio/mp3;base64,//OExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"></audio>
           </div>
           
           <div className="p-3 rounded-2xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between">
@@ -1637,6 +1771,14 @@ export default function App() {
                               <span className="eq-bar !h-4"></span>
                               <span className="eq-bar !h-2"></span>
                             </div>
+                          ) : song.isPreview ? (
+                            <span className="absolute top-2 right-2 text-[9px] font-mono font-bold bg-amber-500/90 text-black backdrop-blur-md px-1.5 py-0.5 rounded shadow pointer-events-none">
+                              30s Preview
+                            </span>
+                          ) : song.isDirectStream ? (
+                            <span className="absolute top-2 right-2 text-[9px] font-mono font-bold bg-[#D5F36A] text-black backdrop-blur-md px-1.5 py-0.5 rounded shadow pointer-events-none">
+                              Full Stream
+                            </span>
                           ) : song.duration ? (
                             <span className="absolute top-2 right-2 text-[10px] font-mono font-semibold bg-black/75 backdrop-blur-md px-1.5 py-0.5 rounded text-slate-300 pointer-events-none">
                               {formatTime(song.duration)}
@@ -1805,6 +1947,14 @@ export default function App() {
                               <span className="eq-bar !h-4"></span>
                               <span className="eq-bar !h-2"></span>
                             </div>
+                          ) : song.isPreview ? (
+                            <span className="absolute top-2 right-2 text-[9px] font-mono font-bold bg-amber-500/90 text-black backdrop-blur-md px-1.5 py-0.5 rounded shadow pointer-events-none">
+                              30s Preview
+                            </span>
+                          ) : song.isDirectStream ? (
+                            <span className="absolute top-2 right-2 text-[9px] font-mono font-bold bg-[#D5F36A] text-black backdrop-blur-md px-1.5 py-0.5 rounded shadow pointer-events-none">
+                              Full Stream
+                            </span>
                           ) : song.duration ? (
                             <span className="absolute top-2 right-2 text-[10px] font-mono font-semibold bg-black/75 backdrop-blur-md px-1.5 py-0.5 rounded text-slate-300 pointer-events-none">
                               {formatTime(song.duration)}
@@ -2362,6 +2512,14 @@ export default function App() {
                               <span className="eq-bar !h-4"></span>
                               <span className="eq-bar !h-2"></span>
                             </div>
+                          ) : song.isPreview ? (
+                            <span className="absolute top-2 right-2 text-[9px] font-mono font-bold bg-amber-500/90 text-black backdrop-blur-md px-1.5 py-0.5 rounded shadow pointer-events-none">
+                              30s Preview
+                            </span>
+                          ) : song.isDirectStream ? (
+                            <span className="absolute top-2 right-2 text-[9px] font-mono font-bold bg-[#D5F36A] text-black backdrop-blur-md px-1.5 py-0.5 rounded shadow pointer-events-none">
+                              Full Stream
+                            </span>
                           ) : song.duration ? (
                             <span className="absolute top-2 right-2 text-[10px] font-mono font-semibold bg-black/75 backdrop-blur-md px-1.5 py-0.5 rounded text-slate-300 pointer-events-none">
                               {formatTime(song.duration)}
@@ -3068,9 +3226,39 @@ export default function App() {
               )}
             </div>
             <div ref={playerTitleRef} className="min-w-0 flex-1">
-              <h4 className="font-heading text-xs md:text-sm font-bold text-[#F5F5F7] truncate group-hover:text-[#D5F36A] transition-colors" title={currentSong ? currentSong.title : (homeData.trending?.[0]?.title || 'ListenUp Music')}>
-                {currentSong ? currentSong.title : (homeData.trending?.[0]?.title || 'ListenUp Music')}
-              </h4>
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                <h4 className="font-heading text-xs md:text-sm font-bold text-[#F5F5F7] truncate group-hover:text-[#D5F36A] transition-colors" title={currentSong ? currentSong.title : (homeData.trending?.[0]?.title || 'ListenUp Music')}>
+                  {currentSong ? currentSong.title : (homeData.trending?.[0]?.title || 'ListenUp Music')}
+                </h4>
+                {currentSong && (
+                  currentSong.isPreview ? (
+                    <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                      <span className="text-[9px] px-1.5 py-0.5 bg-amber-500/20 text-amber-300 rounded font-semibold border border-amber-500/30">30s Preview</span>
+                      <button
+                        onClick={switchToFullSong}
+                        className="text-[9px] px-1.5 py-0.5 bg-white/10 hover:bg-white/20 text-white rounded font-medium border border-white/20"
+                        title="Play full track in YouTube"
+                      >
+                        Full
+                      </button>
+                    </div>
+                  ) : currentSong.streamUrl ? (
+                    <span className="text-[9px] px-1.5 py-0.5 bg-[#D5F36A]/20 text-[#D5F36A] rounded font-semibold border border-[#D5F36A]/30 flex-shrink-0">🎧 Full Stream</span>
+                  ) : (
+                    <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                      <span className="text-[9px] px-1.5 py-0.5 bg-white/10 text-[#9999A6] rounded font-medium" title="Foreground Only">YouTube</span>
+                      <button
+                        onClick={switchToBackgroundAudio}
+                        disabled={isResolvingStream}
+                        className="text-[9px] px-1.5 py-0.5 bg-white/10 hover:bg-white/20 text-amber-300 rounded border border-amber-400/30 font-medium transition-all"
+                        title="Sample 30-second preview clip in background"
+                      >
+                        {isResolvingStream ? '...' : 'Preview'}
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
               <p className="text-[10px] md:text-xs text-[#9999A6] truncate mt-0.5" title={currentSong ? currentSong.artist : (homeData.trending?.[0]?.artist || 'Ready to Stream')}>
                 {currentSong ? currentSong.artist : (homeData.trending?.[0]?.artist || 'Ready to Stream')}
               </p>
@@ -3436,6 +3624,10 @@ export default function App() {
         onToggleRepeat={toggleRepeat}
         favorites={favorites}
         onToggleFavorite={toggleFavorite}
+        onSwitchToBackground={switchToBackgroundAudio}
+        onSwitchToPreview={switchToBackgroundAudio}
+        onSwitchToFullSong={switchToFullSong}
+        isResolvingStream={isResolvingStream}
         queue={queue}
         onPlayFromQueue={(song) => playSong(song)}
         volume={volume}

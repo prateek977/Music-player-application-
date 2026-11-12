@@ -33,6 +33,10 @@ export default function NowPlayingScreen({
   onToggleRepeat,
   favorites = [],
   onToggleFavorite,
+  onSwitchToBackground,
+  onSwitchToPreview,
+  onSwitchToFullSong,
+  isResolvingStream = false,
   queue = [],
   onPlayFromQueue,
   volume = 100,
@@ -177,6 +181,10 @@ export default function NowPlayingScreen({
             song={currentSong}
             isFavorite={isFavorite}
             onToggleFavorite={onToggleFavorite}
+            onSwitchToBackground={onSwitchToBackground}
+            onSwitchToPreview={onSwitchToPreview}
+            onSwitchToFullSong={onSwitchToFullSong}
+            isResolvingStream={isResolvingStream}
           />
         </div>
       </main>
