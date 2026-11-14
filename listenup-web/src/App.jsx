@@ -226,6 +226,86 @@ export default function App() {
     stateRef.current = { currentSong, queue, repeat, isPlaying, shuffle };
   }, [currentSong, queue, repeat, isPlaying, shuffle]);
 
+  // Web MediaSession API integration for OS/hardware media key controls & lock screen info
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('mediaSession' in navigator)) return;
+
+    if (currentSong) {
+      const artworkSrc = currentSong.thumbnailUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=512&auto=format&fit=crop&q=80';
+      try {
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: currentSong.title || 'ListenUp Music',
+          artist: currentSong.artist || 'Unknown Artist',
+          album: currentSong.album || 'ListenUp',
+          artwork: [
+            { src: artworkSrc, sizes: '96x96', type: 'image/jpeg' },
+            { src: artworkSrc, sizes: '192x192', type: 'image/jpeg' },
+            { src: artworkSrc, sizes: '512x512', type: 'image/jpeg' }
+          ]
+        });
+      } catch (err) {
+        console.debug('MediaSession metadata error:', err);
+      }
+    }
+
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+    const setActionHandlerSafe = (action, handler) => {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch (_) {}
+    };
+
+    setActionHandlerSafe('play', () => {
+      setIsPlaying(true);
+      if (playerRef.current && playerRef.current.playVideo) playerRef.current.playVideo();
+    });
+
+    setActionHandlerSafe('pause', () => {
+      setIsPlaying(false);
+      if (playerRef.current && playerRef.current.pauseVideo) playerRef.current.pauseVideo();
+    });
+
+    setActionHandlerSafe('previoustrack', () => {
+      playPrevious();
+    });
+
+    setActionHandlerSafe('nexttrack', () => {
+      playNext();
+    });
+
+    setActionHandlerSafe('seekto', (details) => {
+      if (details.seekTime !== undefined && details.seekTime !== null) {
+        setCurrentTime(details.seekTime);
+        if (isNativeAndroid() && isNativePlaybackRef.current) {
+          nativeMedia.seekTo(details.seekTime);
+        } else if (playerRef.current && playerRef.current.seekTo) {
+          playerRef.current.seekTo(details.seekTime, true);
+        }
+      }
+    });
+
+    setActionHandlerSafe('seekforward', (details) => {
+      const skipTime = details.seekOffset || 10;
+      const target = Math.min(currentTime + skipTime, duration || currentTime + 10);
+      setCurrentTime(target);
+      if (playerRef.current && playerRef.current.seekTo) playerRef.current.seekTo(target, true);
+    });
+
+    setActionHandlerSafe('seekbackward', (details) => {
+      const skipTime = details.seekOffset || 10;
+      const target = Math.max(currentTime - skipTime, 0);
+      setCurrentTime(target);
+      if (playerRef.current && playerRef.current.seekTo) playerRef.current.seekTo(target, true);
+    });
+
+    return () => {
+      ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto', 'seekforward', 'seekbackward'].forEach(action => {
+        setActionHandlerSafe(action, null);
+      });
+    };
+  }, [currentSong?.id, isPlaying, currentTime, duration]);
+
   // Load favorites, volume, playlists and fetch home categories on mount
   useEffect(() => {
     // Initial fetch for playlists/queue happens via Google Login or localStorage
