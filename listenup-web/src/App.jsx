@@ -3307,8 +3307,15 @@ export default function App() {
                             <span className="text-xs font-mono font-bold text-[#666674] w-5 text-center">
                               {sIdx + 1}
                             </span>
-                            <div className="w-12 h-12 rounded-xl overflow-hidden bg-black/40 flex-shrink-0 border border-white/[0.08]">
+                            <div className="w-12 h-12 rounded-xl overflow-hidden bg-black/40 flex-shrink-0 border border-white/[0.08] relative">
                               <img src={song.thumbnailUrl} alt={song.title} className="w-full h-full object-cover" />
+                              {currentSong?.id === song.id && (
+                                <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] flex items-center justify-center gap-1">
+                                  <span className={`eq-bar ${isPlaying ? '!h-3.5' : '!h-1.5'}`} />
+                                  <span className={`eq-bar ${isPlaying ? '!h-5' : '!h-2.5'}`} />
+                                  <span className={`eq-bar ${isPlaying ? '!h-3' : '!h-1.5'}`} />
+                                </div>
+                              )}
                             </div>
                             <div className="min-w-0 flex-1">
                               <h4 className="font-heading font-semibold text-[#F5F5F7] text-sm truncate group-hover:text-[#D5F36A] transition-colors">{song.title}</h4>
@@ -3508,9 +3515,11 @@ export default function App() {
                         >
                           <div className="w-12 h-12 rounded-xl overflow-hidden relative flex-shrink-0 bg-black/40 border border-white/[0.08]">
                             <img src={song.thumbnailUrl} alt={song.title} className="w-full h-full object-cover" />
-                            {isCurrent && isPlaying && (
-                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                                <span className="w-2 h-2 rounded-full bg-[#D5F36A] animate-ping"></span>
+                            {isCurrent && (
+                              <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] flex items-center justify-center gap-1">
+                                <span className={`eq-bar ${isPlaying ? '!h-3.5' : '!h-1.5'}`} />
+                                <span className={`eq-bar ${isPlaying ? '!h-5' : '!h-2.5'}`} />
+                                <span className={`eq-bar ${isPlaying ? '!h-3' : '!h-1.5'}`} />
                               </div>
                             )}
                           </div>
