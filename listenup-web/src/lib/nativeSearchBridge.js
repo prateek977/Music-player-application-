@@ -189,12 +189,12 @@ export async function resolveTrackPreview(song) {
 
   // 1. Extract primary title: take the part before the first pipe, em-dash, or dash
   let cleanTitle = rawTitle.split(/\||–|-/)[0]
-    .replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/gi, '')
+    .replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/gi, '')
     .replace(/official\s*(music\s*)?(video|audio|song)?/gi, '')
-    .replace(/^[a-z0-9]+\s*:\s*/i, '')
+    .replace(/^(track|song)?\s*\d+\s*:\s*|^[a-z0-9_]+\s*:\s*/i, '')
     .trim();
 
-  if (!cleanTitle) cleanTitle = rawTitle.replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/gi, '').trim();
+  if (!cleanTitle) cleanTitle = rawTitle.replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/gi, '').trim();
 
   // 2. Filter out record labels and channel uploader names
   let cleanArtist = rawArtist;

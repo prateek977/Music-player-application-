@@ -31,4 +31,18 @@ test('Search Query Sanitization & Validation', async (t) => {
     assert.equal(sanitizeSearchQuery('A. R. Rahman - Dil Se'), 'A. R. Rahman - Dil Se');
     assert.equal(sanitizeSearchQuery('केसरिया अरिजीत सिंह'), 'केसरिया अरिजीत सिंह');
   });
+
+  await t.test('properly cleans song titles with balanced bracket patterns', () => {
+    const cleanTitle = (rawTitle) => {
+      return rawTitle.split(/\||–|-/)[0]
+        .replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/gi, '')
+        .replace(/official\s*(music\s*)?(video|audio|song)?/gi, '')
+        .replace(/^(track|song)?\s*\d+\s*:\s*|^[a-z0-9_]+\s*:\s*/i, '')
+        .trim();
+    };
+
+    assert.equal(cleanTitle('Kesariya (From "Brahmastra") [Official Video]'), 'Kesariya');
+    assert.equal(cleanTitle('Apna Bana Le {4K Ultra HD} | Bhediya'), 'Apna Bana Le');
+    assert.equal(cleanTitle('Song 01: Starboy - The Weeknd'), 'Starboy');
+  });
 });
