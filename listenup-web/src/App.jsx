@@ -1240,12 +1240,20 @@ export default function App() {
     }
   };
 
-  // Format MM:SS helper
+  // Format MM:SS or H:MM:SS audio timestamp helper
   const formatTime = (secs) => {
-    if (isNaN(secs) || secs === null) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+    if (isNaN(secs) || secs === null || secs === undefined || secs < 0) return '0:00';
+    const total = Math.floor(secs);
+    const hrs = Math.floor(total / 3600);
+    const mins = Math.floor((total % 3600) / 60);
+    const remainingSecs = total % 60;
+    const padSecs = remainingSecs < 10 ? `0${remainingSecs}` : `${remainingSecs}`;
+
+    if (hrs > 0) {
+      const padMins = mins < 10 ? `0${mins}` : `${mins}`;
+      return `${hrs}:${padMins}:${padSecs}`;
+    }
+    return `${mins}:${padSecs}`;
   };
 
   // GSAP: Animate main content view on tab change
