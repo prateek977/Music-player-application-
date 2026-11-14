@@ -46,6 +46,14 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [recentSearches, setRecentSearches] = useState(() => {
+    try {
+      const saved = localStorage.getItem('listenup_recent_searches');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   // Playback Queue State
   const [originalQueue, setOriginalQueue] = useState([]); // for restoring from shuffle
@@ -1145,13 +1153,35 @@ export default function App() {
   };
 
 
-  const handleSearchSubmit = async (e) => {
-    if (e) e.preventDefault();
-    if (!searchQuery.trim()) return;
+  const recordRecentSearch = (term) => {
+    const clean = term.trim();
+    if (!clean) return;
+    setRecentSearches(prev => {
+      const filtered = prev.filter(q => q.toLowerCase() !== clean.toLowerCase());
+      const updated = [clean, ...filtered].slice(0, 8);
+      try {
+        localStorage.setItem('listenup_recent_searches', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
 
+  const clearRecentSearches = () => {
+    setRecentSearches([]);
+    try {
+      localStorage.removeItem('listenup_recent_searches');
+    } catch (_) {}
+  };
+
+  const handleSearchSubmit = async (e, overrideTerm) => {
+    if (e) e.preventDefault();
+    const term = (overrideTerm !== undefined ? overrideTerm : searchQuery).trim();
+    if (!term) return;
+
+    recordRecentSearch(term);
     setSearchLoading(true);
     try {
-      const data = await searchSongs(searchQuery);
+      const data = await searchSongs(term);
       setSearchResults(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Search error:', err);
@@ -1253,6 +1283,7 @@ export default function App() {
   const handleQuickTagClick = (tag) => {
     setSearchQuery(tag);
     setActiveTab('search');
+    recordRecentSearch(tag);
     setSearchLoading(true);
     searchSongs(tag)
       .then(data => {
@@ -2502,6 +2533,40 @@ export default function App() {
                 </button>
               </div>
             </form>
+
+            {/* Recent Searches History */}
+            {recentSearches.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[#9999A6] uppercase tracking-wider flex items-center gap-1.5">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 text-[#D5F36A]">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Recent Searches:
+                  </span>
+                  <button
+                    onClick={clearRecentSearches}
+                    className="text-[11px] text-[#9999A6] hover:text-rose-400 transition-colors cursor-pointer"
+                  >
+                    Clear history
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {recentSearches.map((term) => (
+                    <button
+                      key={term}
+                      onClick={() => {
+                        setSearchQuery(term);
+                        handleSearchSubmit(null, term);
+                      }}
+                      className="px-3.5 py-1.5 rounded-full text-xs font-medium text-[#F5F5F7] bg-[#191922] hover:bg-[#D5F36A]/10 border border-[#D5F36A]/30 hover:border-[#D5F36A] transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>{term}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Quick Trending Search Tags */}
             <div className="space-y-2">
