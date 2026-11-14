@@ -15,7 +15,7 @@ Get the latest installable Android APKs directly from the [ListenUp v1.1.0 Relea
 | **ListenUp Debug APK** | Developer / Direct Install | ~9.3 MB | [📥 Download ListenUp-debug.apk](https://github.com/prateek977/Music-player-application-/releases/download/v1.1.0/ListenUp-debug.apk) |
 | **ListenUp Release APK** | Production (Unsigned) | ~6.9 MB | [📥 Download ListenUp-release-unsigned.apk](https://github.com/prateek977/Music-player-application-/releases/download/v1.1.0/ListenUp-release-unsigned.apk) |
 
-> **Note**: Both APKs are also available inside the [`apks/`](file:///Users/prateekjaiswal/vibe-tunes/listenup/apks) directory of this repository.
+> **Note**: Both APKs are also available inside the [`apks/`](./apks) directory of this repository.
 
 ---
 
@@ -133,6 +133,16 @@ npm install
 ### 3. Run Web Preview
 ```bash
 npm run dev
+```
+
+### 4. Run Test Suite
+```bash
+npm test
+```
+
+### 5. Check Linting & Formatting
+```bash
+npm run lint
 ```
 
 ---
