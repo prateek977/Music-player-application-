@@ -179,7 +179,7 @@ export default function CircularVisualizer({
         
         // Target bar height in pixels
         const minHeight = 3.0;
-        let maxHeight = 28;
+        let maxHeight;
         if (normalizedAngle < 0.3) {
           // Low frequencies (Bass sector)
           maxHeight = 36 * bassMod;

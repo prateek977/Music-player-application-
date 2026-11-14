@@ -166,7 +166,7 @@ class LocalAuthStorageAdapter {
     const account = currentUserEmail ? this.state.users[currentUserEmail] : null;
 
     return {
-      select: (columns = '*') => ({
+      select: (_columns = '*') => ({
         eq: (field, value) => ({
           single: async () => {
             if (tableName === 'profiles') {
@@ -220,7 +220,7 @@ class LocalAuthStorageAdapter {
         return { data: records, error: null };
       },
       delete: () => ({
-        eq: (field, value) => ({
+        eq: (_field, _value) => ({
           then: async (resolve) => {
             if (tableName.startsWith('user_') && account) {
               // clear previous list before re-inserting

@@ -17,19 +17,29 @@ test('Now Playing Audio & Playback Logic', async (t) => {
     assert.equal(calcProgress(50, 0), 50); // fallback duration 100
   });
 
-  await t.test('formats seconds to MM:SS correctly', () => {
+  await t.test('formats seconds to MM:SS and H:MM:SS correctly', () => {
     const formatTime = (secs) => {
-      if (isNaN(secs) || secs === null || secs === undefined) return '0:00';
-      const m = Math.floor(secs / 60);
-      const s = Math.floor(secs % 60);
-      return `${m}:${s < 10 ? '0' : ''}${s}`;
+      if (isNaN(secs) || secs === null || secs === undefined || secs < 0) return '0:00';
+      const total = Math.floor(secs);
+      const hrs = Math.floor(total / 3600);
+      const mins = Math.floor((total % 3600) / 60);
+      const remainingSecs = total % 60;
+      const padSecs = remainingSecs < 10 ? `0${remainingSecs}` : `${remainingSecs}`;
+
+      if (hrs > 0) {
+        const padMins = mins < 10 ? `0${mins}` : `${mins}`;
+        return `${hrs}:${padMins}:${padSecs}`;
+      }
+      return `${mins}:${padSecs}`;
     };
 
     assert.equal(formatTime(0), '0:00');
     assert.equal(formatTime(9), '0:09');
     assert.equal(formatTime(65), '1:05');
     assert.equal(formatTime(254), '4:14');
-    assert.equal(formatTime(3600), '60:00');
+    assert.equal(formatTime(3600), '1:00:00');
+    assert.equal(formatTime(3665), '1:01:05');
+    assert.equal(formatTime(7325), '2:02:05');
   });
 
   await t.test('cycles repeat mode correctly (off -> all -> one -> off)', () => {
@@ -92,5 +102,21 @@ test('Now Playing Audio & Playback Logic', async (t) => {
     const removed = toggle(updated, songToToggle);
     assert.equal(removed.length, 1);
     assert.equal(removed[0].id, 's1');
+  });
+
+  await t.test('cycles playback rate correctly across defined speed presets', () => {
+    const cycleRate = (currentRate) => {
+      const rates = [1, 1.25, 1.5, 2, 0.75];
+      const currentIdx = rates.indexOf(currentRate);
+      const nextIdx = currentIdx === -1 ? 0 : (currentIdx + 1) % rates.length;
+      return rates[nextIdx];
+    };
+
+    assert.equal(cycleRate(1), 1.25);
+    assert.equal(cycleRate(1.25), 1.5);
+    assert.equal(cycleRate(1.5), 2);
+    assert.equal(cycleRate(2), 0.75);
+    assert.equal(cycleRate(0.75), 1);
+    assert.equal(cycleRate(3.0), 1); // unknown fallback
   });
 });

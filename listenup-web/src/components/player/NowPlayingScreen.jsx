@@ -42,9 +42,15 @@ export default function NowPlayingScreen({
   volume = 100,
   isMuted = false,
   onVolumeChange,
-  onToggleMute
+  onToggleMute,
+  sleepTimerMinutes = null,
+  sleepTimerRemainingSecs = null,
+  onSetSleepTimer,
+  playbackRate = 1,
+  onCyclePlaybackRate
 }) {
   const [isQueueDrawerOpen, setIsQueueDrawerOpen] = useState(false);
+  const [isSleepTimerOpen, setIsSleepTimerOpen] = useState(false);
   const [touchStart, setTouchStart] = useState(null);
   const containerRef = useRef(null);
 
@@ -146,21 +152,43 @@ export default function NowPlayingScreen({
           </p>
         </div>
 
-        {/* Queue Button in Header */}
-        <button
-          onClick={() => setIsQueueDrawerOpen(!isQueueDrawerOpen)}
-          aria-label="Toggle Queue"
-          className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-all cursor-pointer relative ${
-            isQueueDrawerOpen ? 'text-[#D5F36A] bg-white/[0.08]' : 'text-[#9999A6] hover:text-[#F5F5F7] hover:bg-white/[0.08]'
-          }`}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-5 h-5">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-          </svg>
-          {queue.length > 0 && (
-            <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#D5F36A]" />
-          )}
-        </button>
+        {/* Right Header Actions: Sleep Timer & Queue Toggle */}
+        <div className="flex items-center gap-1">
+          {/* Sleep Timer Button */}
+          <button
+            onClick={() => setIsSleepTimerOpen(true)}
+            aria-label="Set Sleep Timer"
+            title={sleepTimerMinutes ? `Sleep Timer: ${Math.ceil((sleepTimerRemainingSecs || 0) / 60)}m left` : "Sleep Timer"}
+            className={`min-w-[40px] min-h-[40px] flex items-center justify-center rounded-full transition-all cursor-pointer relative ${
+              sleepTimerMinutes ? 'text-[#D5F36A] bg-[#D5F36A]/10' : 'text-[#9999A6] hover:text-[#F5F5F7] hover:bg-white/[0.08]'
+            }`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-5 h-5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+            </svg>
+            {sleepTimerMinutes && (
+              <span className="absolute -top-1 -right-1 text-[9px] font-bold font-mono px-1 rounded-full bg-[#D5F36A] text-black">
+                {Math.ceil((sleepTimerRemainingSecs || 0) / 60)}m
+              </span>
+            )}
+          </button>
+
+          {/* Queue Button in Header */}
+          <button
+            onClick={() => setIsQueueDrawerOpen(!isQueueDrawerOpen)}
+            aria-label="Toggle Queue"
+            className={`min-w-[40px] min-h-[40px] flex items-center justify-center rounded-full transition-all cursor-pointer relative ${
+              isQueueDrawerOpen ? 'text-[#D5F36A] bg-white/[0.08]' : 'text-[#9999A6] hover:text-[#F5F5F7] hover:bg-white/[0.08]'
+            }`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-5 h-5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+            </svg>
+            {queue.length > 0 && (
+              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#D5F36A]" />
+            )}
+          </button>
+        </div>
       </header>
 
       {/* 3. Center Section: Large Square Album Artwork with Rounded Corners */}
@@ -220,6 +248,8 @@ export default function NowPlayingScreen({
           isMuted={isMuted}
           onVolumeChange={onVolumeChange}
           onToggleMute={onToggleMute}
+          playbackRate={playbackRate}
+          onCyclePlaybackRate={onCyclePlaybackRate}
         />
       </footer>
 
@@ -293,6 +323,65 @@ export default function NowPlayingScreen({
                 );
               })
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 6. Sleep Timer Selection Modal */}
+      {isSleepTimerOpen && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn"
+          onClick={() => setIsSleepTimerOpen(false)}
+        >
+          <div 
+            className="w-full max-w-xs rounded-3xl bg-[#14141E] border border-white/[0.12] p-5 shadow-2xl space-y-4 animate-scaleUp"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🌙</span>
+                <h3 className="text-base font-bold text-[#F5F5F7]">Sleep Timer</h3>
+              </div>
+              <button
+                onClick={() => setIsSleepTimerOpen(false)}
+                className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-white/[0.08] text-[#9999A6] hover:text-white transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <p className="text-xs text-[#9999A6]">
+              Music will automatically pause when the chosen countdown finishes.
+            </p>
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              {[
+                { label: 'Off', val: 'off' },
+                { label: '15 Minutes', val: 15 },
+                { label: '30 Minutes', val: 30 },
+                { label: '45 Minutes', val: 45 },
+                { label: '60 Minutes', val: 60 },
+                { label: 'End of Track', val: 'end-of-track' }
+              ].map(opt => {
+                const isSelected = (opt.val === 'off' && !sleepTimerMinutes) || sleepTimerMinutes === opt.val;
+                return (
+                  <button
+                    key={opt.label}
+                    onClick={() => {
+                      onSetSleepTimer?.(opt.val);
+                      setIsSleepTimerOpen(false);
+                    }}
+                    className={`py-2.5 px-2 rounded-xl text-xs font-semibold text-center border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#D5F36A] text-black border-[#D5F36A] shadow-md shadow-[#D5F36A]/20'
+                        : 'bg-[#191922] text-[#F5F5F7] border-white/[0.08] hover:border-white/20'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

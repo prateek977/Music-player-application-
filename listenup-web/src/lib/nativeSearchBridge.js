@@ -1,4 +1,5 @@
 import { registerPlugin, Capacitor } from '@capacitor/core';
+import { getFallbackHomeData } from './starterCatalog.js';
 
 /**
  * Native Android Song Search & Category Browse Bridge.
@@ -28,6 +29,32 @@ export const isNativeAndroid = () => {
 };
 
 /**
+ * Sanitizes and normalizes a search query string.
+ * Strips control characters, collapses whitespace, and clamps length to max 100 chars.
+ * @param {string} rawQuery
+ * @returns {string} Sanitized query string
+ */
+export function sanitizeSearchQuery(rawQuery) {
+  if (typeof rawQuery !== 'string') return '';
+  const collapsed = rawQuery.replace(/\s+/g, ' ');
+  let cleaned = '';
+  for (let i = 0; i < collapsed.length; i++) {
+    const code = collapsed.charCodeAt(i);
+    // Filter out ASCII/Unicode control characters, zero-width spaces, and byte order marks
+    if (
+      (code >= 0 && code <= 31) ||
+      (code >= 127 && code <= 159) ||
+      (code >= 0x200B && code <= 0x200D) ||
+      code === 0xFEFF
+    ) {
+      continue;
+    }
+    cleaned += collapsed[i];
+  }
+  return cleaned.slice(0, 100).trim();
+}
+
+/**
  * Searches legitimate 30-second preview samples (Apple Music / iTunes preview API).
  * Explicitly flagged as isPreview: true, duration: 30.
  * @param {string} query
@@ -35,7 +62,7 @@ export const isNativeAndroid = () => {
  * @returns {Promise<Array>} Array of song objects with 30s preview streams
  */
 export async function searchAudioPreviews(query, limit = 10) {
-  const trimmed = (query || '').trim();
+  const trimmed = sanitizeSearchQuery(query);
   if (!trimmed) return [];
 
   const cacheKey = `listenup_preview_audio_${trimmed.toLowerCase()}_${limit}`;
@@ -99,7 +126,7 @@ export const searchDirectAudio = searchAudioPreviews;
  * @returns {Promise<Array>}
  */
 export async function searchFullLengthAudio(query, limit = 15) {
-  const trimmed = (query || '').trim();
+  const trimmed = sanitizeSearchQuery(query);
   if (!trimmed) return [];
 
   const cacheKey = `listenup_audius_full_${trimmed.toLowerCase()}_${limit}`;
@@ -160,26 +187,44 @@ export async function searchFullLengthAudio(query, limit = 15) {
  */
 export async function resolveTrackPreview(song) {
   if (!song) return null;
-  if (song.isPreview && song.streamUrl) {
+  if (song.streamUrl) {
     return {
       streamUrl: song.streamUrl,
-      isPreview: true,
-      duration: 30,
-      playbackType: 'preview'
+      isPreview: Boolean(song.isPreview),
+      duration: song.duration || 30,
+      playbackType: song.playbackType || (song.isPreview ? 'preview' : 'stream')
     };
   }
+
+  // Check if song matches any starter catalog track with a verified stream URL
+  try {
+    const fallback = getFallbackHomeData();
+    const allStarterTracks = Object.values(fallback).flat();
+    const matched = allStarterTracks.find(t => 
+      t.id === song.id || 
+      (t.title && song.title && t.title.toLowerCase() === song.title.toLowerCase())
+    );
+    if (matched && matched.streamUrl) {
+      return {
+        streamUrl: matched.streamUrl,
+        isPreview: false,
+        duration: matched.duration || 200,
+        playbackType: 'stream'
+      };
+    }
+  } catch (_) {}
 
   const rawTitle = song.title || '';
   const rawArtist = song.artist || '';
 
   // 1. Extract primary title: take the part before the first pipe, em-dash, or dash
   let cleanTitle = rawTitle.split(/\||–|-/)[0]
-    .replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/gi, '')
+    .replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/gi, '')
     .replace(/official\s*(music\s*)?(video|audio|song)?/gi, '')
-    .replace(/^[a-z0-9]+\s*:\s*/i, '')
+    .replace(/^(track|song)?\s*\d+\s*:\s*|^[a-z0-9_]+\s*:\s*/i, '')
     .trim();
 
-  if (!cleanTitle) cleanTitle = rawTitle.replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/gi, '').trim();
+  if (!cleanTitle) cleanTitle = rawTitle.replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/gi, '').trim();
 
   // 2. Filter out record labels and channel uploader names
   let cleanArtist = rawArtist;
@@ -235,7 +280,7 @@ export async function resolveDirectAudioStream(song) {
  * @returns {Promise<Array>} Array of song objects
  */
 export async function searchSongs(query, limit = 20) {
-  const trimmed = (query || '').trim();
+  const trimmed = sanitizeSearchQuery(query);
   if (!trimmed) return [];
 
   // Direct Audio URL Support: user-provided stream URL
@@ -303,6 +348,35 @@ export async function searchSongs(query, limit = 20) {
   }
   if (audiusResults.length > 0) {
     combined.push(...audiusResults);
+  }
+
+  // 4. Web browser fallback: if no results yet, query licensed Apple/iTunes previews
+  if (combined.length === 0) {
+    const previewResults = await searchAudioPreviews(trimmed, limit).catch(() => []);
+    if (previewResults.length > 0) {
+      combined.push(...previewResults);
+    }
+  }
+
+  // 5. Fallback: match against local starter catalog
+  if (combined.length === 0) {
+    try {
+      const fallback = getFallbackHomeData();
+      const allStarter = Object.values(fallback).flat();
+      const q = trimmed.toLowerCase();
+      const matched = allStarter.filter(t => 
+        t.title?.toLowerCase().includes(q) || 
+        t.artist?.toLowerCase().includes(q) ||
+        t.genre?.toLowerCase().includes(q)
+      );
+      const seen = new Set();
+      matched.forEach(t => {
+        if (!seen.has(t.id)) {
+          seen.add(t.id);
+          combined.push(t);
+        }
+      });
+    } catch (_) {}
   }
 
   if (combined.length > 0) {

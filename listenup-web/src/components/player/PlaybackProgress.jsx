@@ -21,10 +21,18 @@ export default function PlaybackProgress({
   const progressPercent = Math.min(Math.max((displayTime / activeDuration) * 100, 0), 100);
 
   const defaultFormatTime = (secs) => {
-    if (isNaN(secs) || secs === null) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+    if (isNaN(secs) || secs === null || secs === undefined || secs < 0) return '0:00';
+    const total = Math.floor(secs);
+    const hrs = Math.floor(total / 3600);
+    const mins = Math.floor((total % 3600) / 60);
+    const remainingSecs = total % 60;
+    const padSecs = remainingSecs < 10 ? `0${remainingSecs}` : `${remainingSecs}`;
+
+    if (hrs > 0) {
+      const padMins = mins < 10 ? `0${mins}` : `${mins}`;
+      return `${hrs}:${padMins}:${padSecs}`;
+    }
+    return `${mins}:${padSecs}`;
   };
 
   const formatter = formatTime || defaultFormatTime;
@@ -71,7 +79,12 @@ export default function PlaybackProgress({
           onChange={handleChange}
           onMouseUp={handleEnd}
           onTouchEnd={handleEnd}
+          role="slider"
           aria-label="Seek playback position"
+          aria-valuemin="0"
+          aria-valuemax={Math.round(activeDuration)}
+          aria-valuenow={Math.round(displayTime)}
+          aria-valuetext={`${formatter(displayTime)} of ${duration > 0 ? formatter(duration) : 'unknown'}`}
           className="absolute inset-0 w-full opacity-0 cursor-pointer disabled:cursor-not-allowed z-20"
         />
 

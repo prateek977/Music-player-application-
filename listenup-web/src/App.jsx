@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { BackgroundMode } from '@anuradev/capacitor-background-mode';
-import { Capacitor } from '@capacitor/core';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useGSAP } from '@gsap/react';
@@ -10,12 +9,12 @@ import AuthModal from './components/auth/AuthModal';
 import ProfileSettingsModal from './components/profile/ProfileSettingsModal';
 import OnboardingFlow from './components/onboarding/OnboardingFlow';
 import GuestMigrationModal from './components/profile/GuestMigrationModal';
-import { STARTER_ARTISTS } from './lib/starterCatalog';
+import { STARTER_ARTISTS, getFallbackHomeData } from './lib/starterCatalog';
 import { NowPlayingScreen } from './components/player';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
 import { nativeMedia, nativeStorage, isNativeAndroid } from './lib/nativeMediaBridge';
 import { rankSongs } from './lib/localRecommender';
-import { searchSongs, browseCategory, resolveDirectAudioStream, resolveTrackPreview } from './lib/nativeSearchBridge';
+import { searchSongs, browseCategory, resolveTrackPreview } from './lib/nativeSearchBridge';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -29,11 +28,12 @@ export default function App() {
   const [isNowPlayingOpen, setIsNowPlayingOpen] = useState(false);
   const [isResolvingStream, setIsResolvingStream] = useState(false);
   const prevUserRef = useRef(null);
+  const handlersRef = useRef({});
+  const audioRef = useRef(null);
 
   // Navigation & Search State
   const [activeCategoryFilter, setActiveCategoryFilter] = useState('music'); // 'music' | 'podcasts' | 'audiobooks' | 'live'
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
-  const [activeHeroIndex, setActiveHeroIndex] = useState(0);
 
   // Time-based greeting helper
   const getGreeting = () => {
@@ -46,6 +46,14 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [recentSearches, setRecentSearches] = useState(() => {
+    try {
+      const saved = localStorage.getItem('listenup_recent_searches');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   // Playback Queue State
   const [originalQueue, setOriginalQueue] = useState([]); // for restoring from shuffle
@@ -74,24 +82,31 @@ export default function App() {
     } catch { return []; }
   });
   const [suggestedLoading, setSuggestedLoading] = useState(false);
-  const [suggestedMixTitle, setSuggestedMixTitle] = useState('Based on Your Taste');
+  const [suggestedMixTitle] = useState('Based on Your Taste');
 
   // Custom Playlists State
   const [playlists, setPlaylists] = useState(() => {
     const saved = localStorage.getItem('listenup_playlists');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+      try { return JSON.parse(saved); } catch (_e) { /* ignore parse error */ }
     }
     return [];
   });
   const [activePlaylistId, setActivePlaylistId] = useState(null);
+  const [isEditingPlaylistName, setIsEditingPlaylistName] = useState(false);
+  const [editingPlaylistNameValue, setEditingPlaylistNameValue] = useState('');
   const [libraryFilter, setLibraryFilter] = useState('all'); // 'all' | 'playlists' | 'liked'
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [contextMenu, setContextMenu] = useState({ isOpen: false, song: null });
-  const [isPlayerReady, setIsPlayerReady] = useState(false);
+  const [isPlayerReady, setIsPlayerReady] = useState(true);
 
   // Playback State
-  const [queue, setQueue] = useState([]);
+  const [queue, setQueue] = useState(() => {
+    try {
+      const saved = localStorage.getItem('listenup_queue');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   // Recently Played State
   const [recentlyPlayed, setRecentlyPlayed] = useState(() => {
     try {
@@ -115,11 +130,14 @@ export default function App() {
       const guestFavsCount = (favorites || []).length;
       const guestPlsCount = (playlists || []).length;
       if (guestFavsCount > 0 || guestPlsCount > 0) {
-        setIsGuestMigrationOpen(true);
+        const timer = setTimeout(() => {
+          setIsGuestMigrationOpen(true);
+        }, 0);
+        return () => clearTimeout(timer);
       }
     }
     prevUserRef.current = user;
-  }, [user?.id]);
+  }, [user, favorites, playlists]);
 
   // Two-way cloud sync: Fetch cloud favorites & playlists from Supabase when user logs in
   useEffect(() => {
@@ -190,6 +208,152 @@ export default function App() {
   const [repeat, setRepeat] = useState('off'); // 'off' | 'all' | 'one'
   const [shuffle, setShuffle] = useState(false);
 
+  const lastNonZeroVolumeRef = useRef(volume > 0 ? volume : 80);
+
+  const handleVolumeChange = (newVol) => {
+    const clamped = Math.max(0, Math.min(100, typeof newVol === 'number' ? newVol : parseInt(newVol, 10) || 0));
+    setVolume(clamped);
+    if (clamped > 0) {
+      lastNonZeroVolumeRef.current = clamped;
+      setIsMuted(false);
+    } else {
+      setIsMuted(true);
+    }
+    try {
+      localStorage.setItem('listenup_volume', clamped.toString());
+    } catch (_) {}
+
+    if (audioRef.current) {
+      audioRef.current.volume = clamped / 100;
+      audioRef.current.muted = clamped === 0;
+    }
+    if (playerRef.current && playerRef.current.setVolume) {
+      playerRef.current.setVolume(clamped);
+    }
+  };
+
+  const handleToggleMute = () => {
+    if (isMuted || volume === 0) {
+      const restored = lastNonZeroVolumeRef.current > 0 ? lastNonZeroVolumeRef.current : 80;
+      setIsMuted(false);
+      setVolume(restored);
+      try {
+        localStorage.setItem('listenup_volume', restored.toString());
+      } catch (_) {}
+      if (audioRef.current) {
+        audioRef.current.muted = false;
+        audioRef.current.volume = restored / 100;
+      }
+      if (playerRef.current) {
+        if (playerRef.current.unMute) playerRef.current.unMute();
+        if (playerRef.current.setVolume) playerRef.current.setVolume(restored);
+      }
+    } else {
+      lastNonZeroVolumeRef.current = volume;
+      setIsMuted(true);
+      if (audioRef.current) {
+        audioRef.current.muted = true;
+      }
+      if (playerRef.current && playerRef.current.mute) {
+        playerRef.current.mute();
+      }
+    }
+  };
+  handlersRef.current.handleToggleMute = handleToggleMute;
+
+  // Sleep Timer State & Countdown
+  const [sleepTimerMinutes, setSleepTimerMinutes] = useState(null);
+  const [sleepTimerRemainingSecs, setSleepTimerRemainingSecs] = useState(null);
+
+  // Playback Rate / Speed (0.75x, 1x, 1.25x, 1.5x, 2x)
+  const [playbackRate, setPlaybackRate] = useState(1);
+
+  const cyclePlaybackRate = () => {
+    const rates = [1, 1.25, 1.5, 2, 0.75];
+    const currentIdx = rates.indexOf(playbackRate);
+    const nextIdx = currentIdx === -1 ? 0 : (currentIdx + 1) % rates.length;
+    const nextRate = rates[nextIdx];
+    setPlaybackRate(nextRate);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nextRate;
+    }
+    if (playerRef.current && playerRef.current.setPlaybackRate) {
+      try {
+        playerRef.current.setPlaybackRate(nextRate);
+      } catch (_) {}
+    }
+  };
+
+  const setSleepTimer = (mins) => {
+    if (!mins || mins === 'off') {
+      setSleepTimerMinutes(null);
+      setSleepTimerRemainingSecs(null);
+      return;
+    }
+    setSleepTimerMinutes(mins);
+    if (typeof mins === 'number') {
+      setSleepTimerRemainingSecs(mins * 60);
+    } else if (mins === 'end-of-track') {
+      const remaining = Math.max(0, Math.floor((duration || 0) - (currentTime || 0)));
+      setSleepTimerRemainingSecs(remaining > 0 ? remaining : 180);
+    }
+  };
+
+  useEffect(() => {
+    if (sleepTimerRemainingSecs === null) return;
+    if (sleepTimerRemainingSecs <= 0) {
+      const timer = setTimeout(() => {
+        setIsPlaying(false);
+        if (audioRef.current) {
+          audioRef.current.pause();
+        }
+        if (playerRef.current && playerRef.current.pauseVideo) {
+          playerRef.current.pauseVideo();
+        }
+        if (isNativeAndroid() && isNativePlaybackRef.current) {
+          nativeMedia.pause();
+        }
+        setSleepTimerMinutes(null);
+        setSleepTimerRemainingSecs(null);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+
+    const interval = setInterval(() => {
+      setSleepTimerRemainingSecs(prev => {
+        if (prev === null || prev <= 1) {
+          setIsPlaying(false);
+          if (audioRef.current) {
+            audioRef.current.pause();
+          }
+          if (playerRef.current && playerRef.current.pauseVideo) {
+            playerRef.current.pauseVideo();
+          }
+          if (isNativeAndroid() && isNativePlaybackRef.current) {
+            nativeMedia.pause();
+          }
+          setSleepTimerMinutes(null);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [sleepTimerRemainingSecs]);
+
+  // Lightweight Accessible Toast Notification System
+  const [toast, setToast] = useState(null);
+  const toastTimeoutRef = useRef(null);
+
+  const showToast = (message, type = 'info') => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast({ message, type });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+    }, 2800);
+  };
+
   const playerRef = useRef(null);
   const timerRef = useRef(null);
   const createPlaylistDialogRef = useRef(null);
@@ -197,6 +361,11 @@ export default function App() {
   const isNativePlaybackRef = useRef(false);
   const isNativeStateUpdateRef = useRef(false);
   const stateRef = useRef({ currentSong, queue, repeat, isPlaying, shuffle });
+  const initPlayerRef = useRef(null);
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  const currentSongRef = useRef(currentSong);
+  currentSongRef.current = currentSong;
 
   // GSAP Animation & UI Refs
   const mainContentRef = useRef(null);
@@ -209,35 +378,121 @@ export default function App() {
   // Track Recently Played songs dynamically
   useEffect(() => {
     if (!currentSong || !currentSong.id) return;
-    setRecentlyPlayed(prev => {
-      const filtered = prev.filter(s => s.id !== currentSong.id);
-      const updated = [currentSong, ...filtered].slice(0, 25);
-      try {
-        localStorage.setItem('listenup_recently_played', JSON.stringify(updated));
-      } catch (e) {
-        console.error("Error saving recently played:", e);
-      }
-      return updated;
-    });
-  }, [currentSong?.id]);
+    const songToRecord = currentSong;
+    const timer = setTimeout(() => {
+      setRecentlyPlayed(prev => {
+        const filtered = prev.filter(s => s.id !== songToRecord.id);
+        const updated = [songToRecord, ...filtered].slice(0, 25);
+        try {
+          localStorage.setItem('listenup_recently_played', JSON.stringify(updated));
+        } catch (_e) {
+          // ignore storage error
+        }
+        return updated;
+      });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [currentSong]);
 
-  // Sync state ref for YouTube event listeners
+  // Sync state ref for event listeners and audio engine
   useEffect(() => {
-    stateRef.current = { currentSong, queue, repeat, isPlaying, shuffle };
-  }, [currentSong, queue, repeat, isPlaying, shuffle]);
+    stateRef.current = { currentSong, queue, repeat, isPlaying, shuffle, volume, isMuted, playbackRate };
+  }, [currentSong, queue, repeat, isPlaying, shuffle, volume, isMuted, playbackRate]);
+
+  // Web MediaSession API integration for OS/hardware media key controls & lock screen info
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('mediaSession' in navigator)) return;
+
+    if (currentSong) {
+      const artworkSrc = currentSong.thumbnailUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=512&auto=format&fit=crop&q=80';
+      try {
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: currentSong.title || 'ListenUp Music',
+          artist: currentSong.artist || 'Unknown Artist',
+          album: currentSong.album || 'ListenUp',
+          artwork: [
+            { src: artworkSrc, sizes: '96x96', type: 'image/jpeg' },
+            { src: artworkSrc, sizes: '192x192', type: 'image/jpeg' },
+            { src: artworkSrc, sizes: '512x512', type: 'image/jpeg' }
+          ]
+        });
+      } catch (err) {
+        console.debug('MediaSession metadata error:', err);
+      }
+    }
+
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+    const setActionHandlerSafe = (action, handler) => {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch (_) {}
+    };
+
+    setActionHandlerSafe('play', () => {
+      handlersRef.current.handleTogglePlayPause?.();
+    });
+
+    setActionHandlerSafe('pause', () => {
+      handlersRef.current.handleTogglePlayPause?.();
+    });
+
+    setActionHandlerSafe('previoustrack', () => {
+      handlersRef.current.playPrevious?.();
+    });
+
+    setActionHandlerSafe('nexttrack', () => {
+      handlersRef.current.playNext?.();
+    });
+
+    setActionHandlerSafe('seekto', (details) => {
+      if (details.seekTime !== undefined && details.seekTime !== null) {
+        setCurrentTime(details.seekTime);
+        if (isNativeAndroid() && isNativePlaybackRef.current) {
+          nativeMedia.seekTo(details.seekTime);
+        } else if (audioRef.current && !isNaN(audioRef.current.duration)) {
+          audioRef.current.currentTime = details.seekTime;
+        } else if (playerRef.current && playerRef.current.seekTo) {
+          playerRef.current.seekTo(details.seekTime, true);
+        }
+      }
+    });
+
+    setActionHandlerSafe('seekforward', (details) => {
+      const skipTime = details.seekOffset || 10;
+      const target = Math.min(currentTime + skipTime, duration || currentTime + 10);
+      setCurrentTime(target);
+      if (isNativeAndroid() && isNativePlaybackRef.current) {
+        nativeMedia.seekTo(target);
+      } else if (audioRef.current && !isNaN(audioRef.current.duration)) {
+        audioRef.current.currentTime = target;
+      } else if (playerRef.current && playerRef.current.seekTo) {
+        playerRef.current.seekTo(target, true);
+      }
+    });
+
+    setActionHandlerSafe('seekbackward', (details) => {
+      const skipTime = details.seekOffset || 10;
+      const target = Math.max(currentTime - skipTime, 0);
+      setCurrentTime(target);
+      if (isNativeAndroid() && isNativePlaybackRef.current) {
+        nativeMedia.seekTo(target);
+      } else if (audioRef.current && !isNaN(audioRef.current.duration)) {
+        audioRef.current.currentTime = target;
+      } else if (playerRef.current && playerRef.current.seekTo) {
+        playerRef.current.seekTo(target, true);
+      }
+    });
+
+    return () => {
+      ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto', 'seekforward', 'seekbackward'].forEach(action => {
+        setActionHandlerSafe(action, null);
+      });
+    };
+  }, [currentSong, isPlaying, currentTime, duration]);
 
   // Load favorites, volume, playlists and fetch home categories on mount
   useEffect(() => {
-    // Initial fetch for playlists/queue happens via Google Login or localStorage
-    const savedPlaylists = localStorage.getItem('listenup_playlists');
-    if (savedPlaylists) {
-      try { setPlaylists(JSON.parse(savedPlaylists)); } catch (e) { console.error(e); }
-    }
-    const savedQueue = localStorage.getItem('listenup_queue');
-    if (savedQueue) {
-      try { setQueue(JSON.parse(savedQueue)); } catch (e) { console.error(e); }
-    }
-    
     // Fetch home screen browse data
     fetchHomeData();
 
@@ -249,10 +504,10 @@ export default function App() {
       firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
       
       window.onYouTubeIframeAPIReady = () => {
-        initPlayer();
+        initPlayerRef.current?.();
       };
     } else {
-      initPlayer();
+      initPlayerRef.current?.();
     }
 
     // Native Android Background Media3 & Room DB integration
@@ -294,7 +549,7 @@ export default function App() {
           } else if (data.state === 'ENDED') {
             setIsBuffering(false);
             setIsPlaying(false);
-            playNext();
+            handlersRef.current.playNext?.();
           }
         }
       });
@@ -317,11 +572,11 @@ export default function App() {
       });
 
       const subNext = nativeMedia.addNextTrackListener(() => {
-        playNext();
+        handlersRef.current.playNext?.();
       });
 
       const subPrev = nativeMedia.addPreviousTrackListener(() => {
-        playPrevious();
+        handlersRef.current.playPrevious?.();
       });
 
       // Hydrate favorites and playlists from Room SQLite
@@ -389,7 +644,7 @@ export default function App() {
       if (cached) {
         setHomeData(JSON.parse(cached));
       }
-    } catch (e) {}
+    } catch (_e) {}
 
     const categories = ['trending', 'sad', 'bollywood', 'hollywood', 'lofi', 'pop', 'romantic', 'party'];
     try {
@@ -408,21 +663,29 @@ export default function App() {
         romantic: [],
         party: []
       };
-      let hasData = false;
       results.forEach((res) => {
         if (res.status === 'fulfilled' && Array.isArray(res.value.data) && res.value.data.length > 0) {
           newData[res.value.cat] = res.value.data;
-          hasData = true;
         }
       });
-      if (hasData) {
-        setHomeData(newData);
-        try {
-          localStorage.setItem('listenup_cached_home_data', JSON.stringify(newData));
-        } catch (e) {}
-      }
+      
+      // Merge with curated starter tracks for any categories that lacked network data
+      const fallback = getFallbackHomeData();
+      const mergedData = { ...newData };
+      categories.forEach(cat => {
+        if (!Array.isArray(mergedData[cat]) || mergedData[cat].length === 0) {
+          mergedData[cat] = fallback[cat] || [];
+        }
+      });
+
+      setHomeData(mergedData);
+      try {
+        localStorage.setItem('listenup_cached_home_data', JSON.stringify(mergedData));
+      } catch (_e) {}
     } catch (err) {
-      console.warn("Home categories fetch note (using local cache):", err);
+      console.warn("Home categories fetch note (using local fallback):", err);
+      const fallback = getFallbackHomeData();
+      setHomeData(prev => ({ ...fallback, ...prev }));
     } finally {
       setHomeLoading(false);
     }
@@ -468,7 +731,7 @@ export default function App() {
         setSuggestedSongs(finalSuggestions);
         try {
           localStorage.setItem('listenup_suggested_songs', JSON.stringify(finalSuggestions));
-        } catch (e) {}
+        } catch (_e) {}
       }
     } catch (err) {
       console.warn('Personalized suggestions generation note:', err);
@@ -477,9 +740,15 @@ export default function App() {
     }
   };
 
+  const fetchSuggestedSongsRef = useRef(fetchSuggestedSongs);
+  fetchSuggestedSongsRef.current = fetchSuggestedSongs;
+
   // Re-fetch suggested songs whenever user preferences update
   useEffect(() => {
-    fetchSuggestedSongs();
+    const timer = setTimeout(() => {
+      fetchSuggestedSongsRef.current?.();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [
     preferences?.artists?.length, 
     preferences?.genres?.length, 
@@ -514,6 +783,102 @@ export default function App() {
       }
     });
   };
+  initPlayerRef.current = initPlayer;
+
+  // HTMLAudioElement Native Event Listeners
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handlePlay = () => {
+      setIsPlaying(true);
+      setIsBuffering(false);
+    };
+
+    const handlePause = () => {
+      setIsPlaying(false);
+    };
+
+    const handleWaiting = () => {
+      setIsBuffering(true);
+    };
+
+    const handleCanPlay = () => {
+      setIsBuffering(false);
+    };
+
+    const handlePlaying = () => {
+      setIsPlaying(true);
+      setIsBuffering(false);
+    };
+
+    const handleTimeUpdate = () => {
+      if (!isNaN(audio.currentTime)) {
+        setCurrentTime(audio.currentTime);
+      }
+      if (!isNaN(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration);
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      if (!isNaN(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration);
+      }
+      setIsBuffering(false);
+    };
+
+    const handleDurationChange = () => {
+      if (!isNaN(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration);
+      }
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setIsBuffering(false);
+      const { repeat: currentRepeat } = stateRef.current;
+      if (currentRepeat === 'one') {
+        audio.currentTime = 0;
+        audio.play().catch(e => console.warn('Repeat play error:', e));
+      } else {
+        handlersRef.current.playNext?.();
+      }
+    };
+
+    const handleError = () => {
+      console.warn('HTMLAudioElement error event:', audio.error);
+      setIsPlaying(false);
+      setIsBuffering(false);
+      if (audio.src && audio.src !== window.location.href && !audio.src.endsWith('/')) {
+        showToast('Playback error: Audio stream failed to load', 'error');
+      }
+    };
+
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('waiting', handleWaiting);
+    audio.addEventListener('canplay', handleCanPlay);
+    audio.addEventListener('playing', handlePlaying);
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('durationchange', handleDurationChange);
+    audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('error', handleError);
+
+    return () => {
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('waiting', handleWaiting);
+      audio.removeEventListener('canplay', handleCanPlay);
+      audio.removeEventListener('playing', handlePlaying);
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('durationchange', handleDurationChange);
+      audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('error', handleError);
+    };
+  }, []);
 
   const handlePlayerStateChange = (state) => {
     // If native ExoPlayer is the active playback engine, ignore YouTube events
@@ -546,7 +911,7 @@ export default function App() {
         playerRef.current.playVideo();
         setIsPlaying(true);
       } else {
-        playNext();
+        handlersRef.current.playNext?.();
       }
     } else if (state === 3) { // BUFFERING
       setIsBuffering(true);
@@ -557,23 +922,29 @@ export default function App() {
   useEffect(() => {
     if (currentSong && isPlayerReady) {
       if (!currentSong.id && !currentSong.streamUrl) {
-        setIsBuffering(false);
-        setIsPlaying(false);
-        return;
+        const timer = setTimeout(() => {
+          setIsBuffering(false);
+          setIsPlaying(false);
+        }, 0);
+        return () => clearTimeout(timer);
       }
 
       isLoadingSongRef.current = true;
-      setIsBuffering(true);
-      setCurrentTime(0);
-      setDuration(currentSong.isPreview ? 30 : (currentSong.duration || 0));
+      const loadTimer = setTimeout(() => {
+        setIsBuffering(true);
+        setCurrentTime(0);
+        setDuration(currentSong.isPreview ? 30 : (currentSong.duration || 0));
+        setIsPlaying(true);
+      }, 0);
       
       if (isNativeAndroid()) {
         if (currentSong.streamUrl) {
           isNativePlaybackRef.current = true;
           nativeMedia.playTrack(currentSong);
-          if (queue && queue.length > 0) {
-            const idx = queue.findIndex(s => s.id === currentSong.id);
-            nativeMedia.setQueue(queue, idx !== -1 ? idx : 0, true);
+          const activeQueue = queueRef.current;
+          if (activeQueue && activeQueue.length > 0) {
+            const idx = activeQueue.findIndex(s => s.id === currentSong.id);
+            nativeMedia.setQueue(activeQueue, idx !== -1 ? idx : 0, true);
           }
           if (playerRef.current && playerRef.current.pauseVideo) {
             playerRef.current.pauseVideo();
@@ -589,18 +960,35 @@ export default function App() {
         }
       } else {
         isNativePlaybackRef.current = false;
-        if (playerRef.current && playerRef.current.loadVideoById) {
+        if (currentSong.streamUrl) {
+          if (audioRef.current) {
+            if (audioRef.current.src !== currentSong.streamUrl) {
+              audioRef.current.src = currentSong.streamUrl;
+            }
+            const { volume: currentVol = 80, isMuted: currentMuted = false, playbackRate: currentRate = 1 } = stateRef.current || {};
+            audioRef.current.currentTime = 0;
+            audioRef.current.volume = currentMuted ? 0 : currentVol / 100;
+            audioRef.current.playbackRate = currentRate;
+            audioRef.current.play().catch((err) => {
+              console.warn('HTMLAudioElement play() warning:', err);
+              if (err.name === 'NotAllowedError') {
+                setIsPlaying(false);
+                setIsBuffering(false);
+              }
+            });
+          }
+        } else if (playerRef.current && playerRef.current.loadVideoById) {
           playerRef.current.loadVideoById(currentSong.id);
         }
       }
-      setIsPlaying(true);
       addToQueueSilent(currentSong);
+      return () => clearTimeout(loadTimer);
     }
   }, [currentSong, isPlayerReady]);
 
   useEffect(() => {
     // Only synchronize play/pause if a song has actually been loaded
-    if (!currentSong) return;
+    if (!currentSongRef.current) return;
 
     // Guard against re-echoing state changes back to native
     if (isNativeStateUpdateRef.current) {
@@ -615,6 +1003,18 @@ export default function App() {
         nativeMedia.pause();
       }
     } else {
+      if (audioRef.current) {
+        if (isPlaying && audioRef.current.paused) {
+          audioRef.current.play().catch((err) => {
+            console.warn('Audio play sync error:', err);
+            if (err.name === 'NotAllowedError') {
+              setIsPlaying(false);
+            }
+          });
+        } else if (!isPlaying && !audioRef.current.paused) {
+          audioRef.current.pause();
+        }
+      }
       if (playerRef.current && playerRef.current.playVideo && playerRef.current.pauseVideo) {
         if (isPlaying) {
           playerRef.current.playVideo();
@@ -626,52 +1026,15 @@ export default function App() {
   }, [isPlaying]);
 
   useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : volume / 100;
+      audioRef.current.muted = isMuted || volume === 0;
+    }
     if (playerRef.current && playerRef.current.setVolume) {
       playerRef.current.setVolume(isMuted ? 0 : volume);
       localStorage.setItem('listenup_volume', volume.toString());
     }
   }, [volume, isMuted]);
-
-  // --- Media Session API Integration ---
-  useEffect(() => {
-    if ('mediaSession' in navigator && currentSong) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: currentSong.title,
-        artist: currentSong.artist || 'Unknown Artist',
-        artwork: [
-          { src: currentSong.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' }
-        ]
-      });
-
-      try {
-        navigator.mediaSession.setActionHandler('play', () => {
-          setIsPlaying(true);
-        });
-        navigator.mediaSession.setActionHandler('pause', () => {
-          setIsPlaying(false);
-        });
-        navigator.mediaSession.setActionHandler('previoustrack', () => {
-          playPrevious();
-        });
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-          playNext();
-        });
-        navigator.mediaSession.setActionHandler('seekto', (details) => {
-          if (playerRef.current && playerRef.current.seekTo) {
-            playerRef.current.seekTo(details.seekTime, true);
-          }
-        });
-      } catch (error) {
-        console.log("Media session actions not supported", error);
-      }
-    }
-  }, [currentSong]);
-
-  useEffect(() => {
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-    }
-  }, [isPlaying]);
 
   // --- Background Playback Lifecycle & State Recovery ---
   useEffect(() => {
@@ -679,9 +1042,9 @@ export default function App() {
       if (document.hidden) {
         // Enforce foreground-only limitation for YouTube tracks:
         // When the app goes to background, pause YouTube video player cleanly.
-        // For direct audio streams (isNativePlaybackRef.current === true), DO NOT PAUSE!
-        // ExoPlayer foreground service will continue playing seamlessly.
-        if (!isNativePlaybackRef.current && stateRef.current.isPlaying) {
+        // For direct audio streams (isNativePlaybackRef.current === true or currentSong.isDirectStream === true), DO NOT PAUSE!
+        // HTMLAudioElement and ExoPlayer foreground service will continue playing seamlessly.
+        if (!isNativePlaybackRef.current && !currentSongRef.current?.isDirectStream && stateRef.current.isPlaying) {
           if (playerRef.current && playerRef.current.pauseVideo) {
             playerRef.current.pauseVideo();
           }
@@ -730,8 +1093,13 @@ export default function App() {
         setCurrentSong(upgradedSong);
         setDuration(30);
         setCurrentTime(0);
+        if (audioRef.current) {
+          audioRef.current.src = previewData.streamUrl;
+          audioRef.current.currentTime = 0;
+          audioRef.current.play().catch(err => console.warn('Preview play error:', err));
+        }
       } else {
-        alert('A 30-second audio preview sample is not available for this track.');
+        showToast('A 30-second audio preview sample is not available for this track.', 'info');
       }
     } catch (e) {
       console.warn('Failed to resolve direct audio preview:', e);
@@ -760,34 +1128,112 @@ export default function App() {
     setCurrentTime(0);
   };
 
-
   // Queue Operations
-  const playSong = (song) => {
-    setCurrentSong(song);
+  const playSong = async (song) => {
+    if (!song) return;
+
+    let targetSong = { ...song };
+
+    // If song doesn't have a direct streamUrl, resolve preview or fallback
+    if (!targetSong.streamUrl) {
+      setIsBuffering(true);
+      try {
+        const preview = await resolveTrackPreview(targetSong);
+        if (preview && preview.streamUrl) {
+          targetSong = {
+            ...targetSong,
+            streamUrl: preview.streamUrl,
+            isPreview: Boolean(preview.isPreview),
+            isDirectStream: true,
+            playbackType: preview.playbackType || 'preview',
+            duration: preview.duration || 30
+          };
+        }
+      } catch (err) {
+        console.warn('Track preview resolution failed:', err);
+      }
+    }
+
+    // If still no playable audio stream URL:
+    if (!targetSong.streamUrl) {
+      setIsBuffering(false);
+      setIsPlaying(false);
+      showToast(`Audio stream unavailable for "${targetSong.title || 'Selected Track'}"`, 'error');
+      return;
+    }
+
+    // Set state
+    setCurrentSong(targetSong);
+    setCurrentTime(0);
+    setDuration(targetSong.duration || 0);
     setIsBuffering(true);
-    
-    const index = queue.findIndex(s => s.id === song.id);
+
+    const index = queue.findIndex(s => s.id === targetSong.id);
     if (index === -1) {
       const currentIdx = queue.findIndex(s => s.id === currentSong?.id);
       const newQueue = [...queue];
       if (currentIdx === -1) {
-        newQueue.push(song);
+        newQueue.push(targetSong);
       } else {
-        newQueue.splice(currentIdx + 1, 0, song);
+        newQueue.splice(currentIdx + 1, 0, targetSong);
       }
       setQueue(newQueue);
     }
+
+    if (isNativeAndroid()) {
+      isNativePlaybackRef.current = true;
+      nativeMedia.playTrack(targetSong);
+      const activeQueue = queueRef.current;
+      if (activeQueue && activeQueue.length > 0) {
+        const idx = activeQueue.findIndex(s => s.id === targetSong.id);
+        nativeMedia.setQueue(activeQueue, idx !== -1 ? idx : 0, true);
+      }
+      return;
+    }
+
+    isNativePlaybackRef.current = false;
+    const audio = audioRef.current;
+    if (audio) {
+      try {
+        if (audio.src !== targetSong.streamUrl) {
+          audio.src = targetSong.streamUrl;
+        }
+        audio.currentTime = 0;
+        audio.volume = isMuted ? 0 : volume / 100;
+        audio.playbackRate = playbackRate;
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn('HTMLAudioElement play() interrupted or blocked:', err);
+            setIsPlaying(false);
+            setIsBuffering(false);
+            if (err.name === 'NotAllowedError') {
+              showToast('Playback paused: Click play to start audio', 'info');
+            } else {
+              showToast(`Playback error: ${err.message || 'Cannot stream audio'}`, 'error');
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Audio playback execution error:', err);
+        setIsPlaying(false);
+        setIsBuffering(false);
+        showToast('Playback error: Audio cannot be played', 'error');
+      }
+    }
   };
+  handlersRef.current.playSong = playSong;
 
   // Play a song from a list/section and queue all remaining songs as "Up Next"
   const playSongFromList = (song, allSongs) => {
-    const songIdx = allSongs.findIndex(s => s.id === song.id);
-    // Build queue: all songs starting from the tapped one
-    const newQueue = songIdx !== -1 ? allSongs.slice(songIdx) : [song, ...allSongs.filter(s => s.id !== song.id)];
+    if (!song) return;
+    const songList = Array.isArray(allSongs) && allSongs.length > 0 ? allSongs : [song];
+    const songIdx = songList.findIndex(s => s.id === song.id);
+    const newQueue = songIdx !== -1 ? songList.slice(songIdx) : [song, ...songList.filter(s => s.id !== song.id)];
     setQueue(newQueue);
-    setCurrentSong(song);
-    setIsBuffering(true);
+    playSong(song);
   };
+  handlersRef.current.playSongFromList = playSongFromList;
 
   function addToQueueSilent(song) {
     setQueue(prev => {
@@ -800,6 +1246,7 @@ export default function App() {
 
   const appendToQueue = (song) => {
     setQueue(prev => [...prev, song]);
+    showToast(`Added "${song.title}" to Up Next`, 'success');
   };
 
   const removeFromQueue = (songId) => {
@@ -813,14 +1260,19 @@ export default function App() {
     setQueue([]);
     setCurrentSong(null);
     setIsPlaying(false);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
     if (playerRef.current && playerRef.current.stopVideo) {
       playerRef.current.stopVideo();
     }
+    showToast('Playback queue cleared', 'info');
   };
 
   const playNext = () => {
     const { queue: currentQueue, currentSong: activeSong, repeat: currentRepeat } = stateRef.current;
-    if (currentQueue.length === 0) return;
+    if (!currentQueue || currentQueue.length === 0) return;
 
     const currentIdx = currentQueue.findIndex(s => s.id === activeSong?.id);
     if (currentIdx === -1) {
@@ -837,9 +1289,14 @@ export default function App() {
   };
 
   const playPrevious = () => {
-    const { queue: currentQueue, currentSong: activeSong } = stateRef.current;
-    if (currentQueue.length === 0) return;
+    const { queue: currentQueue, currentSong: activeSong, repeat: currentRepeat } = stateRef.current;
+    if (!currentQueue || currentQueue.length === 0) return;
 
+    if (audioRef.current && audioRef.current.currentTime > 3) {
+      audioRef.current.currentTime = 0;
+      setCurrentTime(0);
+      return;
+    }
     if (playerRef.current && playerRef.current.getCurrentTime && playerRef.current.getCurrentTime() > 3) {
       playerRef.current.seekTo(0);
       setCurrentTime(0);
@@ -849,10 +1306,63 @@ export default function App() {
     const currentIdx = currentQueue.findIndex(s => s.id === activeSong?.id);
     if (currentIdx > 0) {
       playSong(currentQueue[currentIdx - 1]);
-    } else if (currentIdx === 0 && repeat === 'all') {
+    } else if (currentIdx === 0 && currentRepeat === 'all') {
       playSong(currentQueue[currentQueue.length - 1]);
+    } else if (currentIdx === 0) {
+      if (audioRef.current) audioRef.current.currentTime = 0;
+      setCurrentTime(0);
     }
   };
+  handlersRef.current.playNext = playNext;
+  handlersRef.current.playPrevious = playPrevious;
+
+  const handleTogglePlayPause = async () => {
+    if (!currentSong) {
+      playFeaturedMix();
+      return;
+    }
+
+    if (isNativeAndroid() && isNativePlaybackRef.current) {
+      if (isPlaying) {
+        nativeMedia.pause();
+        setIsPlaying(false);
+      } else {
+        nativeMedia.resume();
+        setIsPlaying(true);
+      }
+      return;
+    }
+
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      if (!audio.src || audio.src === window.location.href || (currentSong.streamUrl && audio.src !== currentSong.streamUrl)) {
+        if (currentSong.streamUrl) {
+          audio.src = currentSong.streamUrl;
+        } else {
+          playSong(currentSong);
+          return;
+        }
+      }
+      try {
+        audio.volume = isMuted ? 0 : volume / 100;
+        audio.playbackRate = playbackRate;
+        await audio.play();
+      } catch (err) {
+        console.warn('Playback resume failed:', err);
+        setIsPlaying(false);
+        if (err.name === 'NotAllowedError') {
+          showToast('Click play to allow audio playback', 'info');
+        } else {
+          showToast(`Playback error: ${err.message || 'Cannot play audio'}`, 'error');
+        }
+      }
+    }
+  };
+  handlersRef.current.handleTogglePlayPause = handleTogglePlayPause;
 
   const handleShuffleToggle = () => {
     if (!shuffle) {
@@ -890,8 +1400,10 @@ export default function App() {
     let newFavs;
     if (isAlreadyFav) {
       newFavs = favorites.filter(s => s.id !== song.id);
+      showToast(`Removed "${song.title}" from favorites`, 'info');
     } else {
       newFavs = [...favorites, song];
+      showToast(`Added "${song.title}" to favorites`, 'success');
     }
     setFavorites(newFavs);
     localStorage.setItem('listenup_favorites', JSON.stringify(newFavs));
@@ -940,6 +1452,7 @@ export default function App() {
       songs: []
     };
     setPlaylists(prev => [...prev, newPlaylist]);
+    showToast(`Created playlist "${cleanName}"`, 'success');
     if (isNativeAndroid()) {
       nativeStorage.savePlaylist(newPlaylist);
     }
@@ -966,6 +1479,7 @@ export default function App() {
 
   const deletePlaylist = async (playlistId) => {
     setPlaylists(prev => prev.filter(pl => pl.id !== playlistId));
+    showToast('Playlist deleted', 'info');
     if (isNativeAndroid()) {
       nativeStorage.deletePlaylist(playlistId);
     }
@@ -986,15 +1500,48 @@ export default function App() {
     }
   };
 
+  const renamePlaylist = async (playlistId, newName) => {
+    const cleanName = (newName || '').trim();
+    if (!cleanName) return;
+
+    setPlaylists(prev => prev.map(pl => pl.id === playlistId ? { ...pl, name: cleanName } : pl));
+    showToast(`Renamed playlist to "${cleanName}"`, 'success');
+
+    if (isNativeAndroid()) {
+      const pl = playlists.find(p => p.id === playlistId);
+      if (pl) {
+        nativeStorage.savePlaylist({ ...pl, name: cleanName });
+      }
+    }
+
+    if (user?.id && isSupabaseConfigured) {
+      try {
+        await supabase
+          .from('user_playlists')
+          .update({ name: cleanName, updated_at: new Date().toISOString() })
+          .eq('user_id', user.id)
+          .eq('id', playlistId);
+      } catch (err) {
+        console.warn('Playlist rename cloud sync error:', err);
+      }
+    }
+  };
+
   const addSongToPlaylist = async (playlistId, song) => {
+    const pl = playlists.find(p => p.id === playlistId);
+    if (pl && pl.songs.some(s => s.id === song.id)) {
+      showToast('Song is already in this playlist', 'warning');
+      return;
+    }
+
     let targetPlaylist = null;
-    setPlaylists(prev => prev.map(pl => {
-      if (pl.id !== playlistId) return pl;
-      if (pl.songs.some(s => s.id === song.id)) return pl;
-      const updated = { ...pl, songs: [...pl.songs, song] };
+    setPlaylists(prev => prev.map(p => {
+      if (p.id !== playlistId) return p;
+      const updated = { ...p, songs: [...p.songs, song] };
       targetPlaylist = updated;
       return updated;
     }));
+    showToast(`Added to "${pl?.name || 'playlist'}"`, 'success');
 
     if (user?.id && isSupabaseConfigured) {
       try {
@@ -1035,14 +1582,13 @@ export default function App() {
   };
 
   const playPlaylist = (playlist) => {
-    if (!playlist || playlist.songs.length === 0) return;
+    if (!playlist || !playlist.songs || playlist.songs.length === 0) return;
 
     setQueue(playlist.songs);
     if (shuffle) {
       setOriginalQueue(playlist.songs);
     }
-    setCurrentSong(playlist.songs[0]);
-    setIsPlaying(true);
+    playSong(playlist.songs[0]);
   };
 
   const openCreatePlaylistModal = () => {
@@ -1065,13 +1611,35 @@ export default function App() {
   };
 
 
-  const handleSearchSubmit = async (e) => {
-    if (e) e.preventDefault();
-    if (!searchQuery.trim()) return;
+  const recordRecentSearch = (term) => {
+    const clean = term.trim();
+    if (!clean) return;
+    setRecentSearches(prev => {
+      const filtered = prev.filter(q => q.toLowerCase() !== clean.toLowerCase());
+      const updated = [clean, ...filtered].slice(0, 8);
+      try {
+        localStorage.setItem('listenup_recent_searches', JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
 
+  const clearRecentSearches = () => {
+    setRecentSearches([]);
+    try {
+      localStorage.removeItem('listenup_recent_searches');
+    } catch (_) {}
+  };
+
+  const handleSearchSubmit = async (e, overrideTerm) => {
+    if (e) e.preventDefault();
+    const term = (overrideTerm !== undefined ? overrideTerm : searchQuery).trim();
+    if (!term) return;
+
+    recordRecentSearch(term);
     setSearchLoading(true);
     try {
-      const data = await searchSongs(searchQuery);
+      const data = await searchSongs(term);
       setSearchResults(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Search error:', err);
@@ -1087,17 +1655,27 @@ export default function App() {
     setCurrentTime(newTime);
     if (isNativeAndroid() && isNativePlaybackRef.current) {
       nativeMedia.seekTo(newTime);
+    } else if (audioRef.current && !isNaN(audioRef.current.duration)) {
+      audioRef.current.currentTime = newTime;
     } else if (playerRef.current && playerRef.current.seekTo) {
       playerRef.current.seekTo(newTime, true);
     }
   };
 
-  // Format MM:SS helper
+  // Format MM:SS or H:MM:SS audio timestamp helper
   const formatTime = (secs) => {
-    if (isNaN(secs) || secs === null) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+    if (isNaN(secs) || secs === null || secs === undefined || secs < 0) return '0:00';
+    const total = Math.floor(secs);
+    const hrs = Math.floor(total / 3600);
+    const mins = Math.floor((total % 3600) / 60);
+    const remainingSecs = total % 60;
+    const padSecs = remainingSecs < 10 ? `0${remainingSecs}` : `${remainingSecs}`;
+
+    if (hrs > 0) {
+      const padMins = mins < 10 ? `0${mins}` : `${mins}`;
+      return `${hrs}:${padMins}:${padSecs}`;
+    }
+    return `${mins}:${padSecs}`;
   };
 
   // GSAP: Animate main content view on tab change
@@ -1155,15 +1733,36 @@ export default function App() {
     }
   }, [currentSong?.id]);
 
-  // Global Keyboard Shortcut: Cmd/Ctrl + K for Search
+  // Global Accessibility & Playback Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Don't intercept when user is typing in form controls
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) {
+        return;
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setActiveTab('search');
         setTimeout(() => {
           searchInputRef.current?.focus();
         }, 80);
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        if (currentSongRef.current) {
+          handlersRef.current.handleTogglePlayPause?.();
+        } else {
+          handlersRef.current.playFeaturedMix?.();
+        }
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        handlersRef.current.handleToggleMute?.();
+      } else if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        handlersRef.current.playNext?.();
+      } else if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        handlersRef.current.playPrevious?.();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1173,6 +1772,7 @@ export default function App() {
   const handleQuickTagClick = (tag) => {
     setSearchQuery(tag);
     setActiveTab('search');
+    recordRecentSearch(tag);
     setSearchLoading(true);
     searchSongs(tag)
       .then(data => {
@@ -1187,6 +1787,7 @@ export default function App() {
       playSongFromList(homeData.trending[0], homeData.trending);
     }
   };
+  handlersRef.current.playFeaturedMix = playFeaturedMix;
 
   // Personalized Artists Shelf: Prioritizes user's favourite artists
   const displayedArtists = useMemo(() => {
@@ -1222,6 +1823,14 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-[100dvh] w-screen bg-[#08080D] text-[#F5F5F7] overflow-hidden relative font-sans select-none antialiased">
+      {/* Skip to Main Content Link for Keyboard and Screen Reader Accessibility */}
+      <a
+        href="#main-scroll-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2 focus:bg-[#D5F36A] focus:text-black focus:font-bold focus:rounded-xl focus:shadow-2xl focus:outline-none focus:ring-2 focus:ring-black"
+      >
+        Skip to main content
+      </a>
+
       {/* Dynamic Subtle Atmospheric Glow & Noise */}
       <div className="absolute top-[-10%] left-1/4 w-[50%] h-[45%] bg-[#D5F36A]/5 rounded-full blur-[140px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-5%] w-[45%] h-[50%] bg-[#191922]/40 rounded-full blur-[160px] pointer-events-none" />
@@ -1359,6 +1968,14 @@ export default function App() {
 
         {/* Sidebar Bottom Creator Card */}
         <div className="p-4 border-t border-white/[0.06] flex flex-col gap-3 mt-auto">
+          {/* Native HTML5 Audio Element for High-Performance Audio Playback */}
+          <audio
+            ref={audioRef}
+            id="listenup-native-audio"
+            className="hidden"
+            preload="auto"
+            playsInline
+          />
           {/* Hidden YouTube Container */}
           <div className="absolute top-[-9999px] left-[-9999px] opacity-0 pointer-events-none w-[1px] h-[1px] overflow-hidden">
             <div id="yt-player-iframe"></div>
@@ -1403,7 +2020,7 @@ export default function App() {
       </aside>
 
       {/* Main Dashboard Panels */}
-      <main ref={mainContentRef} className="flex-1 flex flex-col h-full overflow-y-auto pb-8 px-4 md:px-8 py-4 md:py-6 z-10">
+      <main id="main-scroll-content" tabIndex={-1} ref={mainContentRef} className="flex-1 flex flex-col h-full overflow-y-auto pb-8 px-4 md:px-8 py-4 md:py-6 z-10 focus:outline-none">
 
         {/* SEO Visually Hidden Content */}
         <section className="sr-only">
@@ -1662,7 +2279,7 @@ export default function App() {
                         <button
                           onClick={() => {
                             if (currentSong && featuredSong && currentSong.id === featuredSong.id) {
-                              setIsPlaying(!isPlaying);
+                              handleTogglePlayPause();
                             } else if (featuredSong) {
                               playSongFromList(featuredSong, homeData.trending.length > 0 ? homeData.trending : [featuredSong]);
                             } else {
@@ -2423,6 +3040,40 @@ export default function App() {
               </div>
             </form>
 
+            {/* Recent Searches History */}
+            {recentSearches.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[#9999A6] uppercase tracking-wider flex items-center gap-1.5">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 text-[#D5F36A]">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Recent Searches:
+                  </span>
+                  <button
+                    onClick={clearRecentSearches}
+                    className="text-[11px] text-[#9999A6] hover:text-rose-400 transition-colors cursor-pointer"
+                  >
+                    Clear history
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {recentSearches.map((term) => (
+                    <button
+                      key={term}
+                      onClick={() => {
+                        setSearchQuery(term);
+                        handleSearchSubmit(null, term);
+                      }}
+                      className="px-3.5 py-1.5 rounded-full text-xs font-medium text-[#F5F5F7] bg-[#191922] hover:bg-[#D5F36A]/10 border border-[#D5F36A]/30 hover:border-[#D5F36A] transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>{term}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Quick Trending Search Tags */}
             <div className="space-y-2">
               <span className="text-xs font-semibold text-[#9999A6] uppercase tracking-wider">
@@ -2907,8 +3558,60 @@ export default function App() {
                     </button>
                     <div className="flex-1 min-w-0">
                       <span className="text-[10px] text-[#D5F36A] uppercase tracking-widest font-mono font-bold">Custom Playlist</span>
-                      <h2 className="font-display text-2xl md:text-3xl font-extrabold text-[#F5F5F7] truncate">{currentPlaylist.name}</h2>
-                      <p className="text-xs text-[#9999A6] mt-0.5">{(currentPlaylist.songs || []).length} Tracks saved</p>
+                      {isEditingPlaylistName ? (
+                        <div className="flex items-center gap-2 mt-1">
+                          <input
+                            type="text"
+                            value={editingPlaylistNameValue}
+                            onChange={(e) => setEditingPlaylistNameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                renamePlaylist(currentPlaylist.id, editingPlaylistNameValue);
+                                setIsEditingPlaylistName(false);
+                              } else if (e.key === 'Escape') {
+                                setIsEditingPlaylistName(false);
+                              }
+                            }}
+                            autoFocus
+                            className="bg-[#191922] border border-[#D5F36A] rounded-lg px-3 py-1 text-lg font-bold text-[#F5F5F7] focus:outline-none"
+                          />
+                          <button
+                            onClick={() => {
+                              renamePlaylist(currentPlaylist.id, editingPlaylistNameValue);
+                              setIsEditingPlaylistName(false);
+                            }}
+                            className="px-3 py-1 bg-[#D5F36A] text-black text-xs font-bold rounded-lg cursor-pointer hover:bg-[#BDE84A]"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setIsEditingPlaylistName(false)}
+                            className="px-2 py-1 text-[#9999A6] hover:text-white text-xs cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <h2 className="font-display text-2xl md:text-3xl font-extrabold text-[#F5F5F7] truncate">{currentPlaylist.name}</h2>
+                          <button
+                            onClick={() => {
+                              setEditingPlaylistNameValue(currentPlaylist.name);
+                              setIsEditingPlaylistName(true);
+                            }}
+                            title="Rename Playlist"
+                            aria-label="Rename Playlist"
+                            className="p-1 rounded-md text-[#9999A6] hover:text-[#D5F36A] hover:bg-white/[0.06] transition-colors cursor-pointer"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-4 h-4">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                            </svg>
+                          </button>
+                        </div>
+                      )}
+                      <p className="text-xs text-[#9999A6] mt-0.5">
+                        {(currentPlaylist.songs || []).length} { (currentPlaylist.songs || []).length === 1 ? 'Track' : 'Tracks' } • {Math.round((currentPlaylist.songs || []).reduce((acc, s) => acc + (s.duration || 0), 0) / 60)} min
+                      </p>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -2953,8 +3656,15 @@ export default function App() {
                             <span className="text-xs font-mono font-bold text-[#666674] w-5 text-center">
                               {sIdx + 1}
                             </span>
-                            <div className="w-12 h-12 rounded-xl overflow-hidden bg-black/40 flex-shrink-0 border border-white/[0.08]">
+                            <div className="w-12 h-12 rounded-xl overflow-hidden bg-black/40 flex-shrink-0 border border-white/[0.08] relative">
                               <img src={song.thumbnailUrl} alt={song.title} className="w-full h-full object-cover" />
+                              {currentSong?.id === song.id && (
+                                <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] flex items-center justify-center gap-1">
+                                  <span className={`eq-bar ${isPlaying ? '!h-3.5' : '!h-1.5'}`} />
+                                  <span className={`eq-bar ${isPlaying ? '!h-5' : '!h-2.5'}`} />
+                                  <span className={`eq-bar ${isPlaying ? '!h-3' : '!h-1.5'}`} />
+                                </div>
+                              )}
                             </div>
                             <div className="min-w-0 flex-1">
                               <h4 className="font-heading font-semibold text-[#F5F5F7] text-sm truncate group-hover:text-[#D5F36A] transition-colors">{song.title}</h4>
@@ -3001,7 +3711,6 @@ export default function App() {
         {activeTab === 'queue' && (() => {
           const currentIdx = queue.findIndex(s => s.id === currentSong?.id);
           const upcomingSongs = currentIdx !== -1 ? queue.slice(currentIdx + 1) : (queue.length > 0 && !currentSong ? queue : []);
-          const historySongs = currentIdx > 0 ? queue.slice(0, currentIdx).reverse() : [];
 
           const onDragEnd = (result) => {
             if (!result.destination) return;
@@ -3154,9 +3863,11 @@ export default function App() {
                         >
                           <div className="w-12 h-12 rounded-xl overflow-hidden relative flex-shrink-0 bg-black/40 border border-white/[0.08]">
                             <img src={song.thumbnailUrl} alt={song.title} className="w-full h-full object-cover" />
-                            {isCurrent && isPlaying && (
-                              <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                                <span className="w-2 h-2 rounded-full bg-[#D5F36A] animate-ping"></span>
+                            {isCurrent && (
+                              <div className="absolute inset-0 bg-black/60 backdrop-blur-[1px] flex items-center justify-center gap-1">
+                                <span className={`eq-bar ${isPlaying ? '!h-3.5' : '!h-1.5'}`} />
+                                <span className={`eq-bar ${isPlaying ? '!h-5' : '!h-2.5'}`} />
+                                <span className={`eq-bar ${isPlaying ? '!h-3' : '!h-1.5'}`} />
                               </div>
                             )}
                           </div>
@@ -3302,15 +4013,22 @@ export default function App() {
               </svg>
             </button>
 
+            {/* Previous Track Button */}
+            <button
+              onClick={playPrevious}
+              disabled={queue.length === 0}
+              className="p-1.5 md:p-2 text-[#9999A6] hover:text-[#F5F5F7] transition-colors disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+              title="Previous Track"
+              aria-label="Previous Track"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 md:w-5 md:h-5">
+                <path d="M18 6l-8.5 6 8.5 6V6zM8 6v12H6V6h2z"/>
+              </svg>
+            </button>
+
             {/* Play/Pause Button - Lime-Green Circle matching reference */}
             <button
-              onClick={() => {
-                if (!currentSong) {
-                  playFeaturedMix();
-                  return;
-                }
-                setIsPlaying(!isPlaying);
-              }}
+              onClick={handleTogglePlayPause}
               className="w-10 h-10 md:w-11 md:h-11 rounded-full bg-[#D5F36A] hover:bg-[#BDE84A] text-black flex items-center justify-center shadow-[0_0_20px_rgba(213,243,106,0.35)] active:scale-90 transition-all flex-shrink-0 cursor-pointer"
               title={isPlaying ? 'Pause' : 'Play'}
               aria-label={isPlaying ? 'Pause' : 'Play'}
@@ -3344,7 +4062,7 @@ export default function App() {
             {/* Desktop Volume Slider */}
             <div className="hidden lg:flex items-center gap-2 pl-2 border-l border-white/[0.08]">
               <button
-                onClick={() => setIsMuted(!isMuted)}
+                onClick={handleToggleMute}
                 className="text-[#9999A6] hover:text-[#F5F5F7] transition-colors cursor-pointer"
                 title={isMuted ? 'Unmute' : 'Mute'}
               >
@@ -3364,10 +4082,8 @@ export default function App() {
                 min="0"
                 max="100"
                 value={isMuted ? 0 : volume}
-                onChange={(e) => {
-                  setVolume(parseInt(e.target.value, 10));
-                  setIsMuted(false);
-                }}
+                onChange={(e) => handleVolumeChange(e.target.value)}
+                aria-label="Desktop volume"
                 className="w-18 accent-[#D5F36A] h-1 rounded-full cursor-pointer"
               />
             </div>
@@ -3607,13 +4323,7 @@ export default function App() {
         isBuffering={isBuffering}
         currentTime={currentTime}
         duration={duration}
-        onPlayPause={() => {
-          if (!currentSong) {
-            playFeaturedMix();
-            return;
-          }
-          setIsPlaying(!isPlaying);
-        }}
+        onPlayPause={handleTogglePlayPause}
         onPrevious={playPrevious}
         onNext={playNext}
         onSeek={handleSeekChange}
@@ -3632,13 +4342,13 @@ export default function App() {
         onPlayFromQueue={(song) => playSong(song)}
         volume={volume}
         isMuted={isMuted}
-        onVolumeChange={(val) => {
-          setVolume(val);
-          if (playerRef.current && playerRef.current.setVolume) {
-            playerRef.current.setVolume(val);
-          }
-        }}
-        onToggleMute={() => setIsMuted(!isMuted)}
+        onVolumeChange={handleVolumeChange}
+        onToggleMute={handleToggleMute}
+        sleepTimerMinutes={sleepTimerMinutes}
+        sleepTimerRemainingSecs={sleepTimerRemainingSecs}
+        onSetSleepTimer={setSleepTimer}
+        playbackRate={playbackRate}
+        onCyclePlaybackRate={cyclePlaybackRate}
       />
 
       {/* Supabase Authentication Modal */}
@@ -3665,6 +4375,20 @@ export default function App() {
         }}
         onSkip={() => setIsGuestMigrationOpen(false)}
       />
+
+      {/* Accessible Toast Notification Banner */}
+      {toast && (
+        <div 
+          role="status"
+          aria-live="polite"
+          className="fixed top-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-full bg-[#191922]/95 backdrop-blur-xl border border-white/[0.15] text-[#F5F5F7] text-xs font-semibold shadow-2xl animate-fadeIn select-none pointer-events-none"
+        >
+          {toast.type === 'success' && <span className="text-[#D5F36A] font-bold">✓</span>}
+          {toast.type === 'warning' && <span className="text-amber-400 font-bold">⚠️</span>}
+          {toast.type === 'info' && <span className="text-sky-400 font-bold">ℹ</span>}
+          <span>{toast.message}</span>
+        </div>
+      )}
     </div>
   );
 }

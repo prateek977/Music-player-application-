@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../../lib/authContext';
 import { STARTER_GENRES, STARTER_ARTISTS, STARTER_LANGUAGES, LISTENING_MOODS, LISTENING_ACTIVITIES } from '../../lib/starterCatalog';
 
@@ -6,21 +6,23 @@ export default function ProfileSettingsModal({ isOpen, onClose }) {
   const { user, profile, preferences, updateProfile, saveOnboardingData, restartOnboarding, signOut } = useAuth();
 
   const [activeTab, setActiveTab] = useState('profile'); // 'profile' | 'preferences'
-  const [displayName, setDisplayName] = useState('');
-  const [selectedGenres, setSelectedGenres] = useState([]);
-  const [selectedArtists, setSelectedArtists] = useState([]);
-  const [selectedLanguages, setSelectedLanguages] = useState([]);
-  const [selectedMoods, setSelectedMoods] = useState([]);
-  const [selectedActivities, setSelectedActivities] = useState([]);
-  const [explicitPreference, setExplicitPreference] = useState(true);
+  const [displayName, setDisplayName] = useState(() => profile?.display_name || user?.user_metadata?.full_name || '');
+  const [selectedGenres, setSelectedGenres] = useState(() => preferences?.genres || []);
+  const [selectedArtists, setSelectedArtists] = useState(() => preferences?.artists || []);
+  const [selectedLanguages, setSelectedLanguages] = useState(() => preferences?.languages || []);
+  const [selectedMoods, setSelectedMoods] = useState(() => preferences?.moods || []);
+  const [selectedActivities, setSelectedActivities] = useState(() => preferences?.activities || []);
+  const [explicitPreference, setExplicitPreference] = useState(() => preferences?.explicit_content_preference ?? true);
   const [artistSearch, setArtistSearch] = useState('');
   
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Sync state when modal opens or profile/preferences change
-  useEffect(() => {
+  // Sync state when modal transitions from closed to open
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  if (prevIsOpen !== isOpen) {
+    setPrevIsOpen(isOpen);
     if (isOpen) {
       setDisplayName(profile?.display_name || user?.user_metadata?.full_name || '');
       setSelectedGenres(preferences?.genres || []);
@@ -32,7 +34,7 @@ export default function ProfileSettingsModal({ isOpen, onClose }) {
       setErrorMsg('');
       setSaveSuccess(false);
     }
-  }, [isOpen, profile, preferences, user]);
+  }
 
   if (!isOpen) return null;
 
@@ -379,7 +381,7 @@ export default function ProfileSettingsModal({ isOpen, onClose }) {
                 </div>
               </div>
 
-              {/* Moods & Activities */}
+              {/* Moods */}
               <div className="space-y-2.5">
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
                   Listening Moods
@@ -400,6 +402,33 @@ export default function ProfileSettingsModal({ isOpen, onClose }) {
                       >
                         <span>{m.icon}</span>
                         <span>{m.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Activities */}
+              <div className="space-y-2.5">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                  Listening Activities
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {LISTENING_ACTIVITIES.map(a => {
+                    const isSelected = selectedActivities.includes(a.id);
+                    return (
+                      <button
+                        type="button"
+                        key={a.id}
+                        onClick={() => handleToggleActivity(a.id)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          isSelected
+                            ? 'bg-[#D5F36A]/20 border-[#D5F36A] text-[#D5F36A]'
+                            : 'bg-white/[0.03] hover:bg-white/[0.06] border-white/[0.08] text-slate-400'
+                        }`}
+                      >
+                        <span>{a.icon}</span>
+                        <span>{a.label}</span>
                       </button>
                     );
                   })}
