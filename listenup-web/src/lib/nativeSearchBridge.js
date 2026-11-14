@@ -28,6 +28,21 @@ export const isNativeAndroid = () => {
 };
 
 /**
+ * Sanitizes and normalizes a search query string.
+ * Strips control characters, collapses whitespace, and clamps length to max 100 chars.
+ * @param {string} rawQuery
+ * @returns {string} Sanitized query string
+ */
+export function sanitizeSearchQuery(rawQuery) {
+  if (typeof rawQuery !== 'string') return '';
+  return rawQuery
+    .replace(/\s+/g, ' ')
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/g, '')
+    .slice(0, 100)
+    .trim();
+}
+
+/**
  * Searches legitimate 30-second preview samples (Apple Music / iTunes preview API).
  * Explicitly flagged as isPreview: true, duration: 30.
  * @param {string} query
@@ -35,7 +50,7 @@ export const isNativeAndroid = () => {
  * @returns {Promise<Array>} Array of song objects with 30s preview streams
  */
 export async function searchAudioPreviews(query, limit = 10) {
-  const trimmed = (query || '').trim();
+  const trimmed = sanitizeSearchQuery(query);
   if (!trimmed) return [];
 
   const cacheKey = `listenup_preview_audio_${trimmed.toLowerCase()}_${limit}`;
@@ -99,7 +114,7 @@ export const searchDirectAudio = searchAudioPreviews;
  * @returns {Promise<Array>}
  */
 export async function searchFullLengthAudio(query, limit = 15) {
-  const trimmed = (query || '').trim();
+  const trimmed = sanitizeSearchQuery(query);
   if (!trimmed) return [];
 
   const cacheKey = `listenup_audius_full_${trimmed.toLowerCase()}_${limit}`;
@@ -235,7 +250,7 @@ export async function resolveDirectAudioStream(song) {
  * @returns {Promise<Array>} Array of song objects
  */
 export async function searchSongs(query, limit = 20) {
-  const trimmed = (query || '').trim();
+  const trimmed = sanitizeSearchQuery(query);
   if (!trimmed) return [];
 
   // Direct Audio URL Support: user-provided stream URL
