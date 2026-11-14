@@ -241,6 +241,60 @@ export default function App() {
     }
   };
 
+  // Sleep Timer State & Countdown
+  const [sleepTimerMinutes, setSleepTimerMinutes] = useState(null);
+  const [sleepTimerRemainingSecs, setSleepTimerRemainingSecs] = useState(null);
+
+  const setSleepTimer = (mins) => {
+    if (!mins || mins === 'off') {
+      setSleepTimerMinutes(null);
+      setSleepTimerRemainingSecs(null);
+      return;
+    }
+    setSleepTimerMinutes(mins);
+    if (typeof mins === 'number') {
+      setSleepTimerRemainingSecs(mins * 60);
+    } else if (mins === 'end-of-track') {
+      const remaining = Math.max(0, Math.floor((duration || 0) - (currentTime || 0)));
+      setSleepTimerRemainingSecs(remaining > 0 ? remaining : 180);
+    }
+  };
+
+  useEffect(() => {
+    if (sleepTimerRemainingSecs === null) return;
+    if (sleepTimerRemainingSecs <= 0) {
+      setIsPlaying(false);
+      if (playerRef.current && playerRef.current.pauseVideo) {
+        playerRef.current.pauseVideo();
+      }
+      if (isNativeAndroid() && isNativePlaybackRef.current) {
+        nativeMedia.pause();
+      }
+      setSleepTimerMinutes(null);
+      setSleepTimerRemainingSecs(null);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setSleepTimerRemainingSecs(prev => {
+        if (prev === null || prev <= 1) {
+          setIsPlaying(false);
+          if (playerRef.current && playerRef.current.pauseVideo) {
+            playerRef.current.pauseVideo();
+          }
+          if (isNativeAndroid() && isNativePlaybackRef.current) {
+            nativeMedia.pause();
+          }
+          setSleepTimerMinutes(null);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [sleepTimerRemainingSecs]);
+
   const playerRef = useRef(null);
   const timerRef = useRef(null);
   const createPlaylistDialogRef = useRef(null);
@@ -3929,6 +3983,9 @@ export default function App() {
         isMuted={isMuted}
         onVolumeChange={handleVolumeChange}
         onToggleMute={handleToggleMute}
+        sleepTimerMinutes={sleepTimerMinutes}
+        sleepTimerRemainingSecs={sleepTimerRemainingSecs}
+        onSetSleepTimer={setSleepTimer}
       />
 
       {/* Supabase Authentication Modal */}
