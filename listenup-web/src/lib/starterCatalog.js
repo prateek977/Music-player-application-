@@ -204,7 +204,9 @@ export const STARTER_TRACKS = {
       artist: 'Arijit Singh & Pritam',
       thumbnailUrl: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80',
       duration: 268,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Bollywood / Romantic'
     },
@@ -214,7 +216,9 @@ export const STARTER_TRACKS = {
       artist: 'Arijit Singh & Sachin-Jigar',
       thumbnailUrl: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=600&auto=format&fit=crop&q=80',
       duration: 261,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Bollywood / Soul'
     },
@@ -224,7 +228,9 @@ export const STARTER_TRACKS = {
       artist: 'Anirudh Ravichander & Arijit Singh',
       thumbnailUrl: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=600&auto=format&fit=crop&q=80',
       duration: 200,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Pop / Bollywood'
     },
@@ -234,7 +240,9 @@ export const STARTER_TRACKS = {
       artist: 'Jasleen Royal & Arijit Singh',
       thumbnailUrl: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=600&auto=format&fit=crop&q=80',
       duration: 194,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Indie / Romantic'
     }
@@ -246,7 +254,9 @@ export const STARTER_TRACKS = {
       artist: 'Arijit Singh',
       thumbnailUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80',
       duration: 262,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Bollywood'
     },
@@ -256,7 +266,9 @@ export const STARTER_TRACKS = {
       artist: 'Jubin Nautiyal & Asees Kaur',
       thumbnailUrl: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80',
       duration: 230,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Bollywood / Romance'
     },
@@ -266,7 +278,9 @@ export const STARTER_TRACKS = {
       artist: 'Arijit Singh & Pritam',
       thumbnailUrl: 'https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=600&auto=format&fit=crop&q=80',
       duration: 289,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Bollywood / Emotional'
     }
@@ -278,7 +292,9 @@ export const STARTER_TRACKS = {
       artist: 'ListenUp Chill Studio',
       thumbnailUrl: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=600&auto=format&fit=crop&q=80',
       duration: 180,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-16.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Lo-Fi / Study'
     },
@@ -288,7 +304,9 @@ export const STARTER_TRACKS = {
       artist: 'Acoustic Lo-Fi Collective',
       thumbnailUrl: 'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?w=600&auto=format&fit=crop&q=80',
       duration: 215,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Lo-Fi / Chill'
     }
@@ -300,7 +318,9 @@ export const STARTER_TRACKS = {
       artist: 'The Weeknd',
       thumbnailUrl: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=600&auto=format&fit=crop&q=80',
       duration: 200,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Synthpop'
     },
@@ -310,7 +330,9 @@ export const STARTER_TRACKS = {
       artist: 'Harry Styles',
       thumbnailUrl: 'https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=600&auto=format&fit=crop&q=80',
       duration: 167,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Pop'
     }
@@ -322,7 +344,9 @@ export const STARTER_TRACKS = {
       artist: 'Pritam & Arijit Singh',
       thumbnailUrl: 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=600&auto=format&fit=crop&q=80',
       duration: 233,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Romantic'
     },
@@ -332,7 +356,9 @@ export const STARTER_TRACKS = {
       artist: 'Vishal Mishra',
       thumbnailUrl: 'https://images.unsplash.com/photo-1487180144351-b8472da7d491?w=600&auto=format&fit=crop&q=80',
       duration: 250,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Romantic / Soul'
     }
@@ -344,7 +370,9 @@ export const STARTER_TRACKS = {
       artist: 'Diljit Dosanjh',
       thumbnailUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=600&auto=format&fit=crop&q=80',
       duration: 189,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Punjabi / Pop'
     },
@@ -354,7 +382,9 @@ export const STARTER_TRACKS = {
       artist: 'Karan Aujla',
       thumbnailUrl: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=600&auto=format&fit=crop&q=80',
       duration: 206,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Punjabi / Party'
     }
@@ -366,7 +396,9 @@ export const STARTER_TRACKS = {
       artist: 'The Weeknd ft. Daft Punk',
       thumbnailUrl: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80',
       duration: 230,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-16.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'R&B / Pop'
     }
@@ -378,7 +410,9 @@ export const STARTER_TRACKS = {
       artist: 'Alka Yagnik & Arijit Singh',
       thumbnailUrl: 'https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=600&auto=format&fit=crop&q=80',
       duration: 341,
-      playbackType: 'youtube',
+      streamUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+      isDirectStream: true,
+      playbackType: 'stream',
       isFullLength: true,
       genre: 'Emotional'
     }

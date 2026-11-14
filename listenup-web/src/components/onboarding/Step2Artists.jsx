@@ -12,39 +12,48 @@ export default function Step2Artists({ selectedArtists, onToggleArtist, onAddCus
   useEffect(() => {
     const q = searchQuery.trim();
     if (!q || q.length < 2) {
-      setDiscoveredArtists([]);
-      setSearching(false);
       return;
     }
 
+    let cancelled = false;
     const timer = setTimeout(async () => {
       setSearching(true);
       try {
         const results = await searchArtists(q, 10);
-        setDiscoveredArtists(results.map(r => ({
-          id: `deezer-${r.id}`,
-          name: r.name,
-          genre: 'Discovered Artist',
-          imageUrl: r.imageUrl
-        })));
+        if (!cancelled) {
+          setDiscoveredArtists(results.map(r => ({
+            id: `deezer-${r.id}`,
+            name: r.name,
+            genre: 'Discovered Artist',
+            imageUrl: r.imageUrl
+          })));
+        }
       } catch (e) {
         console.warn('Artist discovery error:', e);
       } finally {
-        setSearching(false);
+        if (!cancelled) {
+          setSearching(false);
+        }
       }
     }, 350);
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [searchQuery]);
 
   // Combine local starter artists with live discovered artists
   const filteredArtists = useMemo(() => {
-    if (!searchQuery.trim()) return STARTER_ARTISTS;
-    const q = searchQuery.toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return STARTER_ARTISTS;
     const localMatches = STARTER_ARTISTS.filter(a => 
       a.name.toLowerCase().includes(q) || 
       a.genre.toLowerCase().includes(q)
     );
+    if (q.length < 2) {
+      return localMatches;
+    }
     // Merge without duplicates
     const existingNames = new Set(localMatches.map(a => a.name.toLowerCase()));
     const additional = discoveredArtists.filter(d => !existingNames.has(d.name.toLowerCase()));
@@ -102,9 +111,16 @@ export default function Step2Artists({ selectedArtists, onToggleArtist, onAddCus
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full px-4 py-2.5 pl-10 rounded-xl bg-white/[0.04] border border-white/[0.08] focus:border-cyan-400 focus:outline-none text-white text-sm placeholder:text-slate-500 transition-all"
           />
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
+          {searching ? (
+            <svg className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-cyan-400 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          )}
         </div>
 
         {searchQuery && filteredArtists.length === 0 && (

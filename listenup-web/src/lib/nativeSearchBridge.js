@@ -1,4 +1,5 @@
 import { registerPlugin, Capacitor } from '@capacitor/core';
+import { getFallbackHomeData } from './starterCatalog.js';
 
 /**
  * Native Android Song Search & Category Browse Bridge.
@@ -35,11 +36,22 @@ export const isNativeAndroid = () => {
  */
 export function sanitizeSearchQuery(rawQuery) {
   if (typeof rawQuery !== 'string') return '';
-  return rawQuery
-    .replace(/\s+/g, ' ')
-    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/g, '')
-    .slice(0, 100)
-    .trim();
+  const collapsed = rawQuery.replace(/\s+/g, ' ');
+  let cleaned = '';
+  for (let i = 0; i < collapsed.length; i++) {
+    const code = collapsed.charCodeAt(i);
+    // Filter out ASCII/Unicode control characters, zero-width spaces, and byte order marks
+    if (
+      (code >= 0 && code <= 31) ||
+      (code >= 127 && code <= 159) ||
+      (code >= 0x200B && code <= 0x200D) ||
+      code === 0xFEFF
+    ) {
+      continue;
+    }
+    cleaned += collapsed[i];
+  }
+  return cleaned.slice(0, 100).trim();
 }
 
 /**
@@ -175,14 +187,32 @@ export async function searchFullLengthAudio(query, limit = 15) {
  */
 export async function resolveTrackPreview(song) {
   if (!song) return null;
-  if (song.isPreview && song.streamUrl) {
+  if (song.streamUrl) {
     return {
       streamUrl: song.streamUrl,
-      isPreview: true,
-      duration: 30,
-      playbackType: 'preview'
+      isPreview: Boolean(song.isPreview),
+      duration: song.duration || 30,
+      playbackType: song.playbackType || (song.isPreview ? 'preview' : 'stream')
     };
   }
+
+  // Check if song matches any starter catalog track with a verified stream URL
+  try {
+    const fallback = getFallbackHomeData();
+    const allStarterTracks = Object.values(fallback).flat();
+    const matched = allStarterTracks.find(t => 
+      t.id === song.id || 
+      (t.title && song.title && t.title.toLowerCase() === song.title.toLowerCase())
+    );
+    if (matched && matched.streamUrl) {
+      return {
+        streamUrl: matched.streamUrl,
+        isPreview: false,
+        duration: matched.duration || 200,
+        playbackType: 'stream'
+      };
+    }
+  } catch (_) {}
 
   const rawTitle = song.title || '';
   const rawArtist = song.artist || '';
@@ -318,6 +348,35 @@ export async function searchSongs(query, limit = 20) {
   }
   if (audiusResults.length > 0) {
     combined.push(...audiusResults);
+  }
+
+  // 4. Web browser fallback: if no results yet, query licensed Apple/iTunes previews
+  if (combined.length === 0) {
+    const previewResults = await searchAudioPreviews(trimmed, limit).catch(() => []);
+    if (previewResults.length > 0) {
+      combined.push(...previewResults);
+    }
+  }
+
+  // 5. Fallback: match against local starter catalog
+  if (combined.length === 0) {
+    try {
+      const fallback = getFallbackHomeData();
+      const allStarter = Object.values(fallback).flat();
+      const q = trimmed.toLowerCase();
+      const matched = allStarter.filter(t => 
+        t.title?.toLowerCase().includes(q) || 
+        t.artist?.toLowerCase().includes(q) ||
+        t.genre?.toLowerCase().includes(q)
+      );
+      const seen = new Set();
+      matched.forEach(t => {
+        if (!seen.has(t.id)) {
+          seen.add(t.id);
+          combined.push(t);
+        }
+      });
+    } catch (_) {}
   }
 
   if (combined.length > 0) {

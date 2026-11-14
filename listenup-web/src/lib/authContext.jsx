@@ -35,7 +35,7 @@ export function AuthProvider({ children }) {
       const localCachedProfileStr = localStorage.getItem(`listenup_profile_${userId}`);
       let cachedProf = null;
       if (localCachedProfileStr) {
-        try { cachedProf = JSON.parse(localCachedProfileStr); } catch (e) {}
+        try { cachedProf = JSON.parse(localCachedProfileStr); } catch (_e) {}
       }
       const hasCompletedLocally = localStorage.getItem(`listenup_onboarding_completed_${userId}`) === 'true';
       const needsOnboarding = localStorage.getItem(`listenup_needs_onboarding_${userId}`) === 'true' || 
@@ -509,10 +509,10 @@ export function AuthProvider({ children }) {
   );
 }
 
-export function useAuth() {
+export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
-}
+};
