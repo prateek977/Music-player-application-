@@ -1447,20 +1447,41 @@ export default function App() {
     }
   }, [currentSong?.id]);
 
-  // Global Keyboard Shortcut: Cmd/Ctrl + K for Search
+  // Global Accessibility & Playback Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Don't intercept when user is typing in form controls
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) {
+        return;
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setActiveTab('search');
         setTimeout(() => {
           searchInputRef.current?.focus();
         }, 80);
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        if (currentSong) {
+          setIsPlaying(prev => !prev);
+        } else {
+          playFeaturedMix();
+        }
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        handleToggleMute();
+      } else if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        playNext();
+      } else if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        playPrevious();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [currentSong?.id, isPlaying, handleToggleMute]);
 
   const handleQuickTagClick = (tag) => {
     setSearchQuery(tag);
@@ -1515,6 +1536,14 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-[100dvh] w-screen bg-[#08080D] text-[#F5F5F7] overflow-hidden relative font-sans select-none antialiased">
+      {/* Skip to Main Content Link for Keyboard and Screen Reader Accessibility */}
+      <a
+        href="#main-scroll-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2 focus:bg-[#D5F36A] focus:text-black focus:font-bold focus:rounded-xl focus:shadow-2xl focus:outline-none focus:ring-2 focus:ring-black"
+      >
+        Skip to main content
+      </a>
+
       {/* Dynamic Subtle Atmospheric Glow & Noise */}
       <div className="absolute top-[-10%] left-1/4 w-[50%] h-[45%] bg-[#D5F36A]/5 rounded-full blur-[140px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-5%] w-[45%] h-[50%] bg-[#191922]/40 rounded-full blur-[160px] pointer-events-none" />
@@ -1696,7 +1725,7 @@ export default function App() {
       </aside>
 
       {/* Main Dashboard Panels */}
-      <main ref={mainContentRef} className="flex-1 flex flex-col h-full overflow-y-auto pb-8 px-4 md:px-8 py-4 md:py-6 z-10">
+      <main id="main-scroll-content" tabIndex={-1} ref={mainContentRef} className="flex-1 flex flex-col h-full overflow-y-auto pb-8 px-4 md:px-8 py-4 md:py-6 z-10 focus:outline-none">
 
         {/* SEO Visually Hidden Content */}
         <section className="sr-only">
