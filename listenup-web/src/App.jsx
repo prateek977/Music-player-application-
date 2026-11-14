@@ -3537,6 +3537,19 @@ export default function App() {
               </svg>
             </button>
 
+            {/* Previous Track Button */}
+            <button
+              onClick={playPrevious}
+              disabled={queue.length === 0}
+              className="p-1.5 md:p-2 text-[#9999A6] hover:text-[#F5F5F7] transition-colors disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+              title="Previous Track"
+              aria-label="Previous Track"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 md:w-5 md:h-5">
+                <path d="M18 6l-8.5 6 8.5 6V6zM8 6v12H6V6h2z"/>
+              </svg>
+            </button>
+
             {/* Play/Pause Button - Lime-Green Circle matching reference */}
             <button
               onClick={() => {
