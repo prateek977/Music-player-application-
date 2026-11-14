@@ -93,6 +93,8 @@ export default function App() {
     return [];
   });
   const [activePlaylistId, setActivePlaylistId] = useState(null);
+  const [isEditingPlaylistName, setIsEditingPlaylistName] = useState(false);
+  const [editingPlaylistNameValue, setEditingPlaylistNameValue] = useState('');
   const [libraryFilter, setLibraryFilter] = useState('all'); // 'all' | 'playlists' | 'liked'
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [contextMenu, setContextMenu] = useState({ isOpen: false, song: null });
@@ -1080,6 +1082,32 @@ export default function App() {
           .eq('id', playlistId);
       } catch (err) {
         console.warn('Playlist cloud deletion error:', err);
+      }
+    }
+  };
+
+  const renamePlaylist = async (playlistId, newName) => {
+    const cleanName = (newName || '').trim();
+    if (!cleanName) return;
+
+    setPlaylists(prev => prev.map(pl => pl.id === playlistId ? { ...pl, name: cleanName } : pl));
+
+    if (isNativeAndroid()) {
+      const pl = playlists.find(p => p.id === playlistId);
+      if (pl) {
+        nativeStorage.savePlaylist({ ...pl, name: cleanName });
+      }
+    }
+
+    if (user?.id && isSupabaseConfigured) {
+      try {
+        await supabase
+          .from('user_playlists')
+          .update({ name: cleanName, updated_at: new Date().toISOString() })
+          .eq('user_id', user.id)
+          .eq('id', playlistId);
+      } catch (err) {
+        console.warn('Playlist rename cloud sync error:', err);
       }
     }
   };
@@ -3062,8 +3090,60 @@ export default function App() {
                     </button>
                     <div className="flex-1 min-w-0">
                       <span className="text-[10px] text-[#D5F36A] uppercase tracking-widest font-mono font-bold">Custom Playlist</span>
-                      <h2 className="font-display text-2xl md:text-3xl font-extrabold text-[#F5F5F7] truncate">{currentPlaylist.name}</h2>
-                      <p className="text-xs text-[#9999A6] mt-0.5">{(currentPlaylist.songs || []).length} Tracks saved</p>
+                      {isEditingPlaylistName ? (
+                        <div className="flex items-center gap-2 mt-1">
+                          <input
+                            type="text"
+                            value={editingPlaylistNameValue}
+                            onChange={(e) => setEditingPlaylistNameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                renamePlaylist(currentPlaylist.id, editingPlaylistNameValue);
+                                setIsEditingPlaylistName(false);
+                              } else if (e.key === 'Escape') {
+                                setIsEditingPlaylistName(false);
+                              }
+                            }}
+                            autoFocus
+                            className="bg-[#191922] border border-[#D5F36A] rounded-lg px-3 py-1 text-lg font-bold text-[#F5F5F7] focus:outline-none"
+                          />
+                          <button
+                            onClick={() => {
+                              renamePlaylist(currentPlaylist.id, editingPlaylistNameValue);
+                              setIsEditingPlaylistName(false);
+                            }}
+                            className="px-3 py-1 bg-[#D5F36A] text-black text-xs font-bold rounded-lg cursor-pointer hover:bg-[#BDE84A]"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setIsEditingPlaylistName(false)}
+                            className="px-2 py-1 text-[#9999A6] hover:text-white text-xs cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <h2 className="font-display text-2xl md:text-3xl font-extrabold text-[#F5F5F7] truncate">{currentPlaylist.name}</h2>
+                          <button
+                            onClick={() => {
+                              setEditingPlaylistNameValue(currentPlaylist.name);
+                              setIsEditingPlaylistName(true);
+                            }}
+                            title="Rename Playlist"
+                            aria-label="Rename Playlist"
+                            className="p-1 rounded-md text-[#9999A6] hover:text-[#D5F36A] hover:bg-white/[0.06] transition-colors cursor-pointer"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-4 h-4">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                            </svg>
+                          </button>
+                        </div>
+                      )}
+                      <p className="text-xs text-[#9999A6] mt-0.5">
+                        {(currentPlaylist.songs || []).length} { (currentPlaylist.songs || []).length === 1 ? 'Track' : 'Tracks' } • {Math.round((currentPlaylist.songs || []).reduce((acc, s) => acc + (s.duration || 0), 0) / 60)} min
+                      </p>
                     </div>
 
                     <div className="flex items-center gap-2">
