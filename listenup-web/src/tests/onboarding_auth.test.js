@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { STARTER_GENRES, STARTER_ARTISTS, STARTER_LANGUAGES } from '../lib/starterCatalog.js';
+import { STARTER_GENRES, STARTER_ARTISTS, STARTER_LANGUAGES, STARTER_TRACKS, getFallbackHomeData } from '../lib/starterCatalog.js';
 
 describe('Taste Onboarding Catalog & Rules', () => {
   it('should have all 18 standard genres seeded', () => {
@@ -82,5 +82,24 @@ describe('Taste Onboarding Catalog & Rules', () => {
     // 'lofi' and 'romantic' should be in the first two slots
     assert.ok(sortedKeys.slice(0, 2).includes('lofi'));
     assert.ok(sortedKeys.slice(0, 2).includes('romantic'));
+  });
+
+  it('should provide seeded starter tracks with valid metadata across key shelves', () => {
+    assert.ok(STARTER_TRACKS.trending.length >= 3);
+    assert.ok(STARTER_TRACKS.bollywood.length >= 2);
+    assert.ok(STARTER_TRACKS.lofi.length >= 2);
+
+    const firstTrack = STARTER_TRACKS.trending[0];
+    assert.ok(firstTrack.id);
+    assert.ok(firstTrack.title);
+    assert.ok(firstTrack.artist);
+    assert.ok(firstTrack.duration > 0);
+  });
+
+  it('should clone fallback home data without mutating source starter tracks', () => {
+    const fallback = getFallbackHomeData();
+    assert.deepStrictEqual(Object.keys(fallback), Object.keys(STARTER_TRACKS));
+    fallback.trending.push({ id: 'temp_mutated' });
+    assert.notStrictEqual(fallback.trending.length, STARTER_TRACKS.trending.length);
   });
 });

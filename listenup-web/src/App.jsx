@@ -10,7 +10,7 @@ import AuthModal from './components/auth/AuthModal';
 import ProfileSettingsModal from './components/profile/ProfileSettingsModal';
 import OnboardingFlow from './components/onboarding/OnboardingFlow';
 import GuestMigrationModal from './components/profile/GuestMigrationModal';
-import { STARTER_ARTISTS } from './lib/starterCatalog';
+import { STARTER_ARTISTS, getFallbackHomeData } from './lib/starterCatalog';
 import { NowPlayingScreen } from './components/player';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
 import { nativeMedia, nativeStorage, isNativeAndroid } from './lib/nativeMediaBridge';
@@ -503,14 +503,24 @@ export default function App() {
           hasData = true;
         }
       });
-      if (hasData) {
-        setHomeData(newData);
-        try {
-          localStorage.setItem('listenup_cached_home_data', JSON.stringify(newData));
-        } catch (e) {}
-      }
+      
+      // Merge with curated starter tracks for any categories that lacked network data
+      const fallback = getFallbackHomeData();
+      const mergedData = { ...newData };
+      categories.forEach(cat => {
+        if (!Array.isArray(mergedData[cat]) || mergedData[cat].length === 0) {
+          mergedData[cat] = fallback[cat] || [];
+        }
+      });
+
+      setHomeData(mergedData);
+      try {
+        localStorage.setItem('listenup_cached_home_data', JSON.stringify(mergedData));
+      } catch (e) {}
     } catch (err) {
-      console.warn("Home categories fetch note (using local cache):", err);
+      console.warn("Home categories fetch note (using local fallback):", err);
+      const fallback = getFallbackHomeData();
+      setHomeData(prev => ({ ...fallback, ...prev }));
     } finally {
       setHomeLoading(false);
     }

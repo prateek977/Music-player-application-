@@ -195,3 +195,196 @@ export const LISTENING_ACTIVITIES = [
   { id: 'Relaxing', label: 'Relaxing', icon: '🛋️' },
   { id: 'Parties', label: 'Parties', icon: '🎉' }
 ];
+
+export const STARTER_TRACKS = {
+  trending: [
+    {
+      id: 'tr_1',
+      title: 'Kesariya',
+      artist: 'Arijit Singh & Pritam',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80',
+      duration: 268,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Bollywood / Romantic'
+    },
+    {
+      id: 'tr_2',
+      title: 'Apna Bana Le',
+      artist: 'Arijit Singh & Sachin-Jigar',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=600&auto=format&fit=crop&q=80',
+      duration: 261,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Bollywood / Soul'
+    },
+    {
+      id: 'tr_3',
+      title: 'Chaleya',
+      artist: 'Anirudh Ravichander & Arijit Singh',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=600&auto=format&fit=crop&q=80',
+      duration: 200,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Pop / Bollywood'
+    },
+    {
+      id: 'tr_4',
+      title: 'Heeriye',
+      artist: 'Jasleen Royal & Arijit Singh',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=600&auto=format&fit=crop&q=80',
+      duration: 194,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Indie / Romantic'
+    }
+  ],
+  bollywood: [
+    {
+      id: 'bolly_1',
+      title: 'Tum Hi Ho',
+      artist: 'Arijit Singh',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80',
+      duration: 262,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Bollywood'
+    },
+    {
+      id: 'bolly_2',
+      title: 'Raataan Lambiyan',
+      artist: 'Jubin Nautiyal & Asees Kaur',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80',
+      duration: 230,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Bollywood / Romance'
+    },
+    {
+      id: 'bolly_3',
+      title: 'Channa Mereya',
+      artist: 'Arijit Singh & Pritam',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=600&auto=format&fit=crop&q=80',
+      duration: 289,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Bollywood / Emotional'
+    }
+  ],
+  lofi: [
+    {
+      id: 'lofi_1',
+      title: 'Midnight Rain Lo-Fi',
+      artist: 'ListenUp Chill Studio',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=600&auto=format&fit=crop&q=80',
+      duration: 180,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Lo-Fi / Study'
+    },
+    {
+      id: 'lofi_2',
+      title: 'Chai & Nostalgia Beats',
+      artist: 'Acoustic Lo-Fi Collective',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?w=600&auto=format&fit=crop&q=80',
+      duration: 215,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Lo-Fi / Chill'
+    }
+  ],
+  pop: [
+    {
+      id: 'pop_1',
+      title: 'Blinding Lights',
+      artist: 'The Weeknd',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=600&auto=format&fit=crop&q=80',
+      duration: 200,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Synthpop'
+    },
+    {
+      id: 'pop_2',
+      title: 'As It Was',
+      artist: 'Harry Styles',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=600&auto=format&fit=crop&q=80',
+      duration: 167,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Pop'
+    }
+  ],
+  romantic: [
+    {
+      id: 'rom_1',
+      title: 'O Maahi',
+      artist: 'Pritam & Arijit Singh',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=600&auto=format&fit=crop&q=80',
+      duration: 233,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Romantic'
+    },
+    {
+      id: 'rom_2',
+      title: 'Pehle Bhi Main',
+      artist: 'Vishal Mishra',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1487180144351-b8472da7d491?w=600&auto=format&fit=crop&q=80',
+      duration: 250,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Romantic / Soul'
+    }
+  ],
+  party: [
+    {
+      id: 'party_1',
+      title: 'Lover',
+      artist: 'Diljit Dosanjh',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=600&auto=format&fit=crop&q=80',
+      duration: 189,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Punjabi / Pop'
+    },
+    {
+      id: 'party_2',
+      title: 'Tauba Tauba',
+      artist: 'Karan Aujla',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=600&auto=format&fit=crop&q=80',
+      duration: 206,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Punjabi / Party'
+    }
+  ],
+  hollywood: [
+    {
+      id: 'holly_1',
+      title: 'Starboy',
+      artist: 'The Weeknd ft. Daft Punk',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80',
+      duration: 230,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'R&B / Pop'
+    }
+  ],
+  sad: [
+    {
+      id: 'sad_1',
+      title: 'Agar Tum Saath Ho',
+      artist: 'Alka Yagnik & Arijit Singh',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=600&auto=format&fit=crop&q=80',
+      duration: 341,
+      playbackType: 'youtube',
+      isFullLength: true,
+      genre: 'Emotional'
+    }
+  ]
+};
+
+export function getFallbackHomeData() {
+  return JSON.parse(JSON.stringify(STARTER_TRACKS));
+}
