@@ -103,4 +103,20 @@ test('Now Playing Audio & Playback Logic', async (t) => {
     assert.equal(removed.length, 1);
     assert.equal(removed[0].id, 's1');
   });
+
+  await t.test('cycles playback rate correctly across defined speed presets', () => {
+    const cycleRate = (currentRate) => {
+      const rates = [1, 1.25, 1.5, 2, 0.75];
+      const currentIdx = rates.indexOf(currentRate);
+      const nextIdx = currentIdx === -1 ? 0 : (currentIdx + 1) % rates.length;
+      return rates[nextIdx];
+    };
+
+    assert.equal(cycleRate(1), 1.25);
+    assert.equal(cycleRate(1.25), 1.5);
+    assert.equal(cycleRate(1.5), 2);
+    assert.equal(cycleRate(2), 0.75);
+    assert.equal(cycleRate(0.75), 1);
+    assert.equal(cycleRate(3.0), 1); // unknown fallback
+  });
 });

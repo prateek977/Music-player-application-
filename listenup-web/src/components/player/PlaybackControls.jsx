@@ -29,6 +29,8 @@ export default function PlaybackControls({
   isMuted = false,
   onVolumeChange,
   onToggleMute,
+  playbackRate = 1,
+  onCyclePlaybackRate,
   className = ''
 }) {
   return (
@@ -143,8 +145,21 @@ export default function PlaybackControls({
           )}
         </button>
 
+        {/* Playback Rate / Speed Selector */}
+        {onCyclePlaybackRate && (
+          <button
+            onClick={onCyclePlaybackRate}
+            className="px-2.5 py-1 rounded-full bg-white/[0.06] hover:bg-white/[0.12] text-[#F5F5F7] text-[11px] font-mono font-semibold border border-white/[0.08] transition-all cursor-pointer flex items-center gap-1 active:scale-95"
+            title="Cycle Playback Speed (0.75x, 1x, 1.25x, 1.5x, 2x)"
+            aria-label={`Playback speed: ${playbackRate}x`}
+          >
+            <span className="text-[#D5F36A]">⚡</span>
+            <span>{playbackRate}x</span>
+          </button>
+        )}
+
         {/* Ambient Quality Info */}
-        <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-[#666674] font-mono">
+        <div className="hidden md:flex items-center gap-1.5 text-[11px] text-[#666674] font-mono">
           <span className="w-1.5 h-1.5 rounded-full bg-[#D5F36A] animate-pulse" />
           <span>High Fidelity • 48kHz</span>
         </div>

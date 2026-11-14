@@ -245,6 +245,22 @@ export default function App() {
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState(null);
   const [sleepTimerRemainingSecs, setSleepTimerRemainingSecs] = useState(null);
 
+  // Playback Rate / Speed (0.75x, 1x, 1.25x, 1.5x, 2x)
+  const [playbackRate, setPlaybackRate] = useState(1);
+
+  const cyclePlaybackRate = () => {
+    const rates = [1, 1.25, 1.5, 2, 0.75];
+    const currentIdx = rates.indexOf(playbackRate);
+    const nextIdx = currentIdx === -1 ? 0 : (currentIdx + 1) % rates.length;
+    const nextRate = rates[nextIdx];
+    setPlaybackRate(nextRate);
+    if (playerRef.current && playerRef.current.setPlaybackRate) {
+      try {
+        playerRef.current.setPlaybackRate(nextRate);
+      } catch (_) {}
+    }
+  };
+
   const setSleepTimer = (mins) => {
     if (!mins || mins === 'off') {
       setSleepTimerMinutes(null);
@@ -3986,6 +4002,8 @@ export default function App() {
         sleepTimerMinutes={sleepTimerMinutes}
         sleepTimerRemainingSecs={sleepTimerRemainingSecs}
         onSetSleepTimer={setSleepTimer}
+        playbackRate={playbackRate}
+        onCyclePlaybackRate={cyclePlaybackRate}
       />
 
       {/* Supabase Authentication Modal */}

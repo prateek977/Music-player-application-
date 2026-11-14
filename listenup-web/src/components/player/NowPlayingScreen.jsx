@@ -45,7 +45,9 @@ export default function NowPlayingScreen({
   onToggleMute,
   sleepTimerMinutes = null,
   sleepTimerRemainingSecs = null,
-  onSetSleepTimer
+  onSetSleepTimer,
+  playbackRate = 1,
+  onCyclePlaybackRate
 }) {
   const [isQueueDrawerOpen, setIsQueueDrawerOpen] = useState(false);
   const [isSleepTimerOpen, setIsSleepTimerOpen] = useState(false);
@@ -246,6 +248,8 @@ export default function NowPlayingScreen({
           isMuted={isMuted}
           onVolumeChange={onVolumeChange}
           onToggleMute={onToggleMute}
+          playbackRate={playbackRate}
+          onCyclePlaybackRate={onCyclePlaybackRate}
         />
       </footer>
 
