@@ -17,6 +17,10 @@ const DURATION_MAX_IDEAL = 360; // 6 min
 const RECENT_PLAY_WINDOW_MS = 60 * 60 * 1000; // 1 hr
 
 export function scoreSong(song, userPrefs = {}, history = [], favorites = []) {
+  if (!song) return 0;
+  const safeHistory = Array.isArray(history) ? history : [];
+  const safeFavorites = Array.isArray(favorites) ? favorites : [];
+
   const genres = (userPrefs.genres || []).map(g => g.toLowerCase());
   const artists = (userPrefs.artists || []).map(a => typeof a === 'string' ? a.toLowerCase() : a.name.toLowerCase());
   const moods = (userPrefs.moods || []).map(m => m.toLowerCase());
@@ -26,7 +30,7 @@ export function scoreSong(song, userPrefs = {}, history = [], favorites = []) {
   const songGenre = (song.genre || '').toLowerCase();
 
   // 1. Genre / Mood similarity (0.0 to 1.0)
-  let genreScore = 0.0;
+  let genreScore;
   if (genres.length > 0) {
     const genreMatch = genres.some(g => songGenre.includes(g) || songTitle.includes(g));
     genreScore = genreMatch ? 1.0 : 0.2;
@@ -38,23 +42,19 @@ export function scoreSong(song, userPrefs = {}, history = [], favorites = []) {
   }
 
   // 2. Artist preference (0.0 to 1.0)
-  let artistScore = 0.1;
+  let artistScore;
   if (artists.length > 0) {
-    if (artists.some(a => songArtist.includes(a))) {
-      artistScore = 1.0;
-    } else {
-      artistScore = 0.25;
-    }
+    artistScore = artists.some(a => songArtist.includes(a)) ? 1.0 : 0.25;
   } else {
     artistScore = 0.5;
   }
 
   // 3. Listening history signal (0.0 to 1.0)
   let historyScore = 0.5;
-  const songHistory = history.filter(h => h.songId === song.id);
+  const songHistory = safeHistory.filter(h => h.songId === song.id);
   const playCount = songHistory.length;
   const skipCount = songHistory.filter(h => h.wasSkipped).length;
-  const isFav = favorites.some(f => f.id === song.id);
+  const isFav = safeFavorites.some(f => f.id === song.id);
 
   if (isFav) historyScore += 0.3;
   if (playCount > 0) historyScore += Math.min(0.3, playCount * 0.1);
