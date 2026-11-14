@@ -311,6 +311,18 @@ export default function App() {
     return () => clearInterval(interval);
   }, [sleepTimerRemainingSecs]);
 
+  // Lightweight Accessible Toast Notification System
+  const [toast, setToast] = useState(null);
+  const toastTimeoutRef = useRef(null);
+
+  const showToast = (message, type = 'info') => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast({ message, type });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+    }, 2800);
+  };
+
   const playerRef = useRef(null);
   const timerRef = useRef(null);
   const createPlaylistDialogRef = useRef(null);
@@ -1011,6 +1023,7 @@ export default function App() {
 
   const appendToQueue = (song) => {
     setQueue(prev => [...prev, song]);
+    showToast(`Added "${song.title}" to Up Next`, 'success');
   };
 
   const removeFromQueue = (songId) => {
@@ -1027,6 +1040,7 @@ export default function App() {
     if (playerRef.current && playerRef.current.stopVideo) {
       playerRef.current.stopVideo();
     }
+    showToast('Playback queue cleared', 'info');
   };
 
   const playNext = () => {
@@ -1101,8 +1115,10 @@ export default function App() {
     let newFavs;
     if (isAlreadyFav) {
       newFavs = favorites.filter(s => s.id !== song.id);
+      showToast(`Removed "${song.title}" from favorites`, 'info');
     } else {
       newFavs = [...favorites, song];
+      showToast(`Added "${song.title}" to favorites`, 'success');
     }
     setFavorites(newFavs);
     localStorage.setItem('listenup_favorites', JSON.stringify(newFavs));
@@ -1151,6 +1167,7 @@ export default function App() {
       songs: []
     };
     setPlaylists(prev => [...prev, newPlaylist]);
+    showToast(`Created playlist "${cleanName}"`, 'success');
     if (isNativeAndroid()) {
       nativeStorage.savePlaylist(newPlaylist);
     }
@@ -1177,6 +1194,7 @@ export default function App() {
 
   const deletePlaylist = async (playlistId) => {
     setPlaylists(prev => prev.filter(pl => pl.id !== playlistId));
+    showToast('Playlist deleted', 'info');
     if (isNativeAndroid()) {
       nativeStorage.deletePlaylist(playlistId);
     }
@@ -1202,6 +1220,7 @@ export default function App() {
     if (!cleanName) return;
 
     setPlaylists(prev => prev.map(pl => pl.id === playlistId ? { ...pl, name: cleanName } : pl));
+    showToast(`Renamed playlist to "${cleanName}"`, 'success');
 
     if (isNativeAndroid()) {
       const pl = playlists.find(p => p.id === playlistId);
@@ -1224,14 +1243,20 @@ export default function App() {
   };
 
   const addSongToPlaylist = async (playlistId, song) => {
+    const pl = playlists.find(p => p.id === playlistId);
+    if (pl && pl.songs.some(s => s.id === song.id)) {
+      showToast('Song is already in this playlist', 'warning');
+      return;
+    }
+
     let targetPlaylist = null;
-    setPlaylists(prev => prev.map(pl => {
-      if (pl.id !== playlistId) return pl;
-      if (pl.songs.some(s => s.id === song.id)) return pl;
-      const updated = { ...pl, songs: [...pl.songs, song] };
+    setPlaylists(prev => prev.map(p => {
+      if (p.id !== playlistId) return p;
+      const updated = { ...p, songs: [...p.songs, song] };
       targetPlaylist = updated;
       return updated;
     }));
+    showToast(`Added to "${pl?.name || 'playlist'}"`, 'success');
 
     if (user?.id && isSupabaseConfigured) {
       try {
@@ -4039,6 +4064,20 @@ export default function App() {
         }}
         onSkip={() => setIsGuestMigrationOpen(false)}
       />
+
+      {/* Accessible Toast Notification Banner */}
+      {toast && (
+        <div 
+          role="status"
+          aria-live="polite"
+          className="fixed top-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-full bg-[#191922]/95 backdrop-blur-xl border border-white/[0.15] text-[#F5F5F7] text-xs font-semibold shadow-2xl animate-fadeIn select-none pointer-events-none"
+        >
+          {toast.type === 'success' && <span className="text-[#D5F36A] font-bold">✓</span>}
+          {toast.type === 'warning' && <span className="text-amber-400 font-bold">⚠️</span>}
+          {toast.type === 'info' && <span className="text-sky-400 font-bold">ℹ</span>}
+          <span>{toast.message}</span>
+        </div>
+      )}
     </div>
   );
 }
