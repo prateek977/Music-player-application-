@@ -200,6 +200,47 @@ export default function App() {
   const [repeat, setRepeat] = useState('off'); // 'off' | 'all' | 'one'
   const [shuffle, setShuffle] = useState(false);
 
+  const lastNonZeroVolumeRef = useRef(volume > 0 ? volume : 80);
+
+  const handleVolumeChange = (newVol) => {
+    const clamped = Math.max(0, Math.min(100, typeof newVol === 'number' ? newVol : parseInt(newVol, 10) || 0));
+    setVolume(clamped);
+    if (clamped > 0) {
+      lastNonZeroVolumeRef.current = clamped;
+      setIsMuted(false);
+    } else {
+      setIsMuted(true);
+    }
+    try {
+      localStorage.setItem('listenup_volume', clamped.toString());
+    } catch (_) {}
+
+    if (playerRef.current && playerRef.current.setVolume) {
+      playerRef.current.setVolume(clamped);
+    }
+  };
+
+  const handleToggleMute = () => {
+    if (isMuted || volume === 0) {
+      const restored = lastNonZeroVolumeRef.current > 0 ? lastNonZeroVolumeRef.current : 80;
+      setIsMuted(false);
+      setVolume(restored);
+      try {
+        localStorage.setItem('listenup_volume', restored.toString());
+      } catch (_) {}
+      if (playerRef.current) {
+        if (playerRef.current.unMute) playerRef.current.unMute();
+        if (playerRef.current.setVolume) playerRef.current.setVolume(restored);
+      }
+    } else {
+      lastNonZeroVolumeRef.current = volume;
+      setIsMuted(true);
+      if (playerRef.current && playerRef.current.mute) {
+        playerRef.current.mute();
+      }
+    }
+  };
+
   const playerRef = useRef(null);
   const timerRef = useRef(null);
   const createPlaylistDialogRef = useRef(null);
@@ -3600,7 +3641,7 @@ export default function App() {
             {/* Desktop Volume Slider */}
             <div className="hidden lg:flex items-center gap-2 pl-2 border-l border-white/[0.08]">
               <button
-                onClick={() => setIsMuted(!isMuted)}
+                onClick={handleToggleMute}
                 className="text-[#9999A6] hover:text-[#F5F5F7] transition-colors cursor-pointer"
                 title={isMuted ? 'Unmute' : 'Mute'}
               >
@@ -3620,10 +3661,8 @@ export default function App() {
                 min="0"
                 max="100"
                 value={isMuted ? 0 : volume}
-                onChange={(e) => {
-                  setVolume(parseInt(e.target.value, 10));
-                  setIsMuted(false);
-                }}
+                onChange={(e) => handleVolumeChange(e.target.value)}
+                aria-label="Desktop volume"
                 className="w-18 accent-[#D5F36A] h-1 rounded-full cursor-pointer"
               />
             </div>
@@ -3888,13 +3927,8 @@ export default function App() {
         onPlayFromQueue={(song) => playSong(song)}
         volume={volume}
         isMuted={isMuted}
-        onVolumeChange={(val) => {
-          setVolume(val);
-          if (playerRef.current && playerRef.current.setVolume) {
-            playerRef.current.setVolume(val);
-          }
-        }}
-        onToggleMute={() => setIsMuted(!isMuted)}
+        onVolumeChange={handleVolumeChange}
+        onToggleMute={handleToggleMute}
       />
 
       {/* Supabase Authentication Modal */}
