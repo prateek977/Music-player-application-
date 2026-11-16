@@ -1,14 +1,37 @@
 # pyrefly: ignore [missing-import]
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-import yt_dlp
+"""
+ListenUp Flask API & Media Streaming Server
+===========================================
+This module serves as the primary backend server for the ListenUp music player application.
+
+Key Capabilities:
+  1. Static Asset Delivery: Serves React SPA production builds with deep-linking support.
+  2. Audio Streaming: Extracts direct, high-bitrate audio streams from YouTube via yt-dlp.
+  3. Search & Browsing: Implements flat YouTube search and category browsing with TTL caching.
+  4. Artist Discovery Proxy: Proxies search requests to the public Deezer API with image sanitization,
+     data normalization, and in-memory LRU-style eviction caching.
+  5. User Data Persistence: Integrates SQLite for custom playlists, favorites, and user preferences.
+  6. Explainable Recommendations: Powers hybrid music recommendations, listening event tracking,
+     and next-track autoplay generation.
+"""
+
+from __future__ import annotations
+
 import logging
 import os
 import random
 import string
-from datetime import datetime
+import sys
 import time
+import time as _time
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import requests
+import yt_dlp
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
 from auth import require_auth, verify_supabase_token
 import user_db
 from recommender import (
@@ -19,36 +42,72 @@ from recommender import (
     upsert_user_song_stats,
 )
 
-# Set up static folder pointing to the React production build if it exists
-base_dir = os.path.dirname(os.path.abspath(__file__))
-dist_folder = os.path.join(base_dir, '..', 'listenup-web', 'dist')
+# ─── Static Directory Resolution for Single-Page Application (SPA) ───────────
+# Resolves the production build directory from listenup-web/dist if present,
+# falling back to local static folder.
+base_dir: str = os.path.dirname(os.path.abspath(__file__))
+dist_folder: str = os.path.join(base_dir, '..', 'listenup-web', 'dist')
 if not os.path.exists(dist_folder):
     dist_folder = os.path.join(base_dir, 'static')
 
-import sys
-
+# Initialize Flask application with custom static folder
 app = Flask(__name__, static_folder=dist_folder, static_url_path='')
-CORS(app)  # Enable CORS for clients
+CORS(app)  # Enable Cross-Origin Resource Sharing for web & mobile clients
 
+# Configure server logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   CORE APPLICATION & HEALTH CHECK ROUTES
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @app.route('/')
-def index():
-    """Serve the React frontend in production (SPA deep-link support)"""
+def index() -> Any:
+    """
+    Serve the production React frontend Single-Page Application (SPA).
+
+    Returns:
+        Response: HTML content of index.html if built, or informational plain text.
+    """
     try:
         return app.send_static_file('index.html')
     except Exception:
         return "ListenUp Web: Run 'npm run build' inside listenup-web to build the frontend.", 200
 
+
 @app.route('/health', methods=['GET'])
-def health():
-    """Health check endpoint"""
+def health() -> Any:
+    """
+    Health check endpoint for container orchestrators and monitoring probes.
+
+    Returns:
+        JSON response with service status and name.
+    """
     return jsonify({"status": "ok", "service": "yt-dlp-server"})
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   YOUTUBE SEARCH & BROWSE ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @app.route('/api/search', methods=['GET'])
-def search():
-    """Search YouTube for videos/songs using yt-dlp flat extraction"""
+def search() -> Any:
+    """
+    Search YouTube for music tracks using yt-dlp flat extraction.
+
+    Query Parameters:
+        q (str): Search term / query string.
+
+    Filtering & Sanitation:
+        - Drops shorts (<60 seconds) and ultra-long mixes (>600 seconds).
+        - Extracts high-resolution thumbnail fallback chains.
+        - Limits output to top 20 relevant items.
+
+    Returns:
+        JSON array of song dictionaries: [{id, title, artist, thumbnailUrl, duration, viewCount}, ...]
+    """
     query = request.args.get('q', '')
     if not query:
         return jsonify([])
@@ -103,12 +162,13 @@ def search():
         logger.error(f"Search error for query '{query}': {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# Simple in-memory cache for browse results (avoids hammering yt-dlp on page load)
-import time as _time
-_browse_cache = {}
-_CACHE_TTL = 600  # 10 minutes
 
-BROWSE_CATEGORIES = {
+# In-memory browse cache: stores pre-fetched category queries to avoid excessive yt-dlp queries
+_browse_cache: Dict[str, Tuple[List[Dict[str, Any]], float]] = {}
+_CACHE_TTL: int = 600  # 10 minutes cache validity
+
+# Predefined curated browse queries for popular music genres and moods
+BROWSE_CATEGORIES: Dict[str, str] = {
     "trending": "latest trending hit songs india official music video",
     "sad": "sad emotional heartbreak songs hindi official video",
     "bollywood": "latest bollywood songs official video",
@@ -119,15 +179,25 @@ BROWSE_CATEGORIES = {
     "party": "party dance songs hindi official video"
 }
 
+
 @app.route('/api/browse', methods=['GET'])
-def browse():
-    """Return curated songs for a category using predefined searches"""
+def browse() -> Any:
+    """
+    Return curated songs for a predefined music category.
+
+    Query Parameters:
+        category (str): Category key (e.g. 'trending', 'bollywood', 'lofi').
+                        Defaults to 'trending'.
+
+    Returns:
+        JSON array of top 20 curated tracks for the category.
+    """
     category = request.args.get('category', 'trending').lower()
 
     if category not in BROWSE_CATEGORIES:
         return jsonify({"error": f"Unknown category: {category}", "available": list(BROWSE_CATEGORIES.keys())}), 400
 
-    # Check cache
+    # Check in-memory TTL browse cache
     cache_key = category
     now = _time.time()
     if cache_key in _browse_cache:
@@ -186,25 +256,37 @@ def browse():
         logger.error(f"Browse error for category '{category}': {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
 @app.route('/api/categories', methods=['GET'])
-def categories():
-    """Return the list of available browse categories"""
+def categories() -> Any:
+    """
+    List all supported browse category slugs.
+
+    Returns:
+        JSON list of string category keys.
+    """
     return jsonify(list(BROWSE_CATEGORIES.keys()))
 
-# Initialize user database
+
+# ── Initialize Local Persistent SQLite Database ──────────────────────────────
 try:
     user_db.init_db()
     logger.info("Initialized local persistent user database (user_data.db)")
 except Exception as _db_init_err:
     logger.warning("Failed initializing user_db: %s", _db_init_err)
 
-# ── Deezer Artist Discovery Configuration & In-Memory Cache ──────────────────
-_ARTIST_SEARCH_CACHE: dict[str, tuple[float, dict]] = {}
-_ARTIST_CACHE_TTL = 900.0  # 15 minutes TTL
-_ARTIST_CACHE_MAX = 300
 
-# Authentic popular artist discovery seeds - starting with the exact 10 artists from the design image
-DEFAULT_DISCOVERY_ARTIST_NAMES = [
+# ═══════════════════════════════════════════════════════════════════════════════
+#   DEEZER ARTIST DISCOVERY PROXY & NORMALIZATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# In-memory artist search cache with max-size eviction control
+_ARTIST_SEARCH_CACHE: dict[str, tuple[float, dict]] = {}
+_ARTIST_CACHE_TTL: float = 900.0  # 15 minutes TTL
+_ARTIST_CACHE_MAX: int = 300
+
+# Curated popular artist discovery seeds for initial onboarding & exploration
+DEFAULT_DISCOVERY_ARTIST_NAMES: List[str] = [
     "Arijit Singh",
     "Pritam",
     "Vishal Mishra",
@@ -227,8 +309,20 @@ DEFAULT_DISCOVERY_ARTIST_NAMES = [
     "Ed Sheeran"
 ]
 
+
 def _clean_artist_image(url: str | None) -> str | None:
-    """Sanitize Deezer image URLs and filter out Deezer's blank placeholder hashes."""
+    """
+    Sanitize artist image URLs from Deezer and filter out placeholder blank hashes.
+
+    Deezer returns an empty hash with double-slash like '/images/artist//250x250...'
+    when no official artist photograph is uploaded.
+
+    Args:
+        url: Raw image URL from Deezer API.
+
+    Returns:
+        str | None: Cleaned valid URL or None if placeholder/invalid.
+    """
     if not url or not isinstance(url, str):
         return None
     url = url.strip()
@@ -239,8 +333,18 @@ def _clean_artist_image(url: str | None) -> str | None:
         return None
     return url
 
+
 def _normalize_deezer_artist(raw: dict) -> dict:
-    """Normalize Deezer API artist payload into ListenUp's canonical contract."""
+    """
+    Normalize Deezer API artist payload into ListenUp's canonical artist contract.
+
+    Args:
+        raw: Raw artist dict returned from Deezer API.
+
+    Returns:
+        dict: Normalized artist object {id, name, image, imageMedium, imageLarge,
+              deezerUrl, provider, fanCount, albumCount}.
+    """
     artist_id = str(raw.get("id") or "")
     name = (raw.get("name") or "Unknown Artist").strip()
     picture_small = _clean_artist_image(raw.get("picture_small") or raw.get("picture"))
@@ -265,14 +369,19 @@ def _normalize_deezer_artist(raw: dict) -> dict:
         "albumCount": album_count,
     }
 
+
 @app.route('/api/artists/search', methods=['GET'])
-def search_artists():
+def search_artists() -> Any:
     """
     Search music artists via Deezer public API proxy.
-    Query parameters:
-        q: Artist name or query (e.g. 'arijit'). If empty or missing, returns curated popular discovery artists.
-        limit: Max results to return (default 20, min 1, max 50).
-        index: Pagination offset index (default 0, min 0).
+
+    Query Parameters:
+        q (str): Artist name or query. If empty or missing, returns curated popular discovery artists.
+        limit (int): Max results to return (default 20, clamped between 1 and 50).
+        index (int): Pagination offset index (default 0, min 0).
+
+    Returns:
+        JSON object: {artists, total, hasMore, nextIndex, provider, query}
     """
     query = (request.args.get('q') or '').strip()
     try:
@@ -410,12 +519,27 @@ def search_artists():
             "error": "Failed to search artists"
         }), 500
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   AUDIO STREAM EXTRACTION (yt-dlp)
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @app.route('/stream/<video_id>', methods=['GET'])
 @app.route('/api/stream/<video_id>', methods=['GET'])
-def get_stream(video_id):
+def get_stream(video_id: str) -> Any:
     """
-    Extract audio stream URL for a YouTube video
-    Returns JSON with stream URL and metadata
+    Extract direct audio stream URL and playback metadata for a YouTube video.
+
+    Process:
+      1. Resolves video info with format preference 'bestaudio/best'.
+      2. Selects pure audio streams (vcodec='none', acodec!='none') with highest bitrate.
+      3. Returns stream URL, audio format, and bitrate quality indicator.
+
+    Path Parameter:
+        video_id: YouTube 11-character video ID.
+
+    Returns:
+        JSON object: {video_id, stream_url, title, duration, format, quality}
     """
     try:
         logger.info(f"Extracting stream for video: {video_id}")
@@ -469,12 +593,23 @@ def get_stream(video_id):
         logger.error(f"Error extracting stream for {video_id}: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# ─── Authenticated & Personalized Recommendation Endpoints ──────────
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   AUTHENTICATION & USER IDENTITY RESOLUTION
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route('/api/auth/verify', methods=['GET'])
 @require_auth
-def verify_authenticated_user():
-    """Verify Supabase JWT token and return verified user claims"""
+def verify_authenticated_user() -> Any:
+    """
+    Verify incoming Supabase JWT token and return authenticated user identity.
+
+    Decorated with `@require_auth` which inspects the Bearer token in the
+    Authorization header and injects validated claims into `request.user`.
+
+    Returns:
+        JSON object: {status: 'authenticated', user_id: str, email: str, role: str}
+    """
     user = getattr(request, 'user', {})
     return jsonify({
         "status": "authenticated",
@@ -483,14 +618,27 @@ def verify_authenticated_user():
         "role": user.get('role', 'authenticated')
     })
 
-def get_request_user_id():
-    """Extract authenticated user ID from Authorization header or explicit param/body."""
+
+def get_request_user_id() -> Optional[str]:
+    """
+    Extract verified user identifier from request headers or request payload.
+
+    Resolution Strategy:
+      1. Inspects the 'Authorization: Bearer <token>' header and verifies token via Supabase.
+      2. If absent, inspects 'userId' in query arguments.
+      3. If absent, inspects 'userId' in JSON request body.
+      4. Explicitly rejects guest/anonymous string identifiers ('guest', 'anonymous', 'null').
+
+    Returns:
+        str | None: Verified user UUID string or None if unauthenticated/guest.
+    """
     auth_header = request.headers.get('Authorization', '')
     if auth_header.startswith('Bearer '):
         token = auth_header.split(' ', 1)[1].strip()
         payload, err = verify_supabase_token(token)
         if payload and (payload.get('sub') or payload.get('id')):
             return payload.get('sub') or payload.get('id')
+
     # Fallback to explicit userId param if client authenticated via Supabase JS client
     user_id = request.args.get('userId')
     if not user_id and request.is_json and request.json:
@@ -499,10 +647,26 @@ def get_request_user_id():
         return str(user_id)
     return None
 
-# ── User Preferences Endpoints (Persistent Database) ──────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   USER PREFERENCES ENDPOINTS (SQLite Persistence)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route('/api/user/preferences', methods=['GET', 'POST'])
-def handle_user_preferences():
+def handle_user_preferences() -> Any:
+    """
+    Manage user onboarding and listening preferences.
+
+    Methods:
+      - GET: Returns the user's stored preferences dictionary.
+      - POST: Upserts preferences (genres, artists, languages, moods, explicit content).
+
+    Security:
+      - Requires authenticated user_id; unauthenticated guests receive HTTP 401.
+
+    Returns:
+        JSON object: {success: bool, preferences: dict}
+    """
     user_id = get_request_user_id()
     if not user_id:
         return jsonify({"error": "Authentication required. Guest users cannot persist preferences."}), 401
@@ -525,10 +689,26 @@ def handle_user_preferences():
         saved = user_db.save_user_preferences(user_id, cleaned)
         return jsonify({"success": True, "preferences": saved})
 
-# ── User Playlists Endpoints (Persistent Database) ───────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   USER PLAYLISTS ENDPOINTS (SQLite Persistence)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route('/api/user/playlists', methods=['GET', 'POST'])
-def handle_user_playlists():
+def handle_user_playlists() -> Any:
+    """
+    List or create custom user playlists.
+
+    Methods:
+      - GET: Returns all custom playlists owned by the authenticated user.
+      - POST: Creates a new playlist with optional initial songs and cover URL.
+
+    Security:
+      - Requires authenticated user_id; unauthenticated guests receive HTTP 401.
+
+    Returns:
+        JSON object: {success: bool, playlists: list} or {success: bool, playlist: dict}
+    """
     user_id = get_request_user_id()
     if not user_id:
         return jsonify({"error": "Authentication required. Guest users cannot persist playlists."}), 401
@@ -545,8 +725,22 @@ def handle_user_playlists():
         created = user_db.create_user_playlist(user_id, name, cover_url, songs)
         return jsonify({"success": True, "playlist": created})
 
+
 @app.route('/api/user/playlists/<playlist_id>', methods=['PUT', 'DELETE'])
-def handle_single_user_playlist(playlist_id):
+def handle_single_user_playlist(playlist_id: str) -> Any:
+    """
+    Update or delete a specific user playlist.
+
+    Methods:
+      - PUT: Updates playlist name, songs list, or cover artwork.
+      - DELETE: Permanently deletes the playlist if owned by requesting user.
+
+    Security:
+      - Validates user identity and verifies ownership before mutation.
+
+    Returns:
+        JSON object: {success: bool, [playlist: dict]}
+    """
     user_id = get_request_user_id()
     if not user_id:
         return jsonify({"error": "Authentication required."}), 401
@@ -568,10 +762,23 @@ def handle_single_user_playlist(playlist_id):
             return jsonify({"error": "Playlist not found or access denied"}), 404
         return jsonify({"success": True, "playlist": updated})
 
-# ── User Favorites Endpoints (Persistent Database) ───────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   USER FAVORITES ENDPOINTS (SQLite Persistence)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route('/api/user/favorites', methods=['GET', 'POST'])
-def handle_user_favorites():
+def handle_user_favorites() -> Any:
+    """
+    Retrieve or bookmark favorite tracks for an authenticated user.
+
+    Methods:
+      - GET: Returns array of favorited songs with complete metadata.
+      - POST: Bookmarks a song for the user.
+
+    Returns:
+        JSON object: {success: bool, favorites: list} or {success: bool, song: dict}
+    """
     user_id = get_request_user_id()
     if not user_id:
         return jsonify({"error": "Authentication required. Guest users cannot persist favorites."}), 401
@@ -586,8 +793,18 @@ def handle_user_favorites():
         saved = user_db.add_user_favorite(user_id, song)
         return jsonify({"success": True, "song": saved})
 
+
 @app.route('/api/user/favorites/<song_id>', methods=['DELETE'])
-def handle_remove_user_favorite(song_id):
+def handle_remove_user_favorite(song_id: str) -> Any:
+    """
+    Remove a song from the user's favorites list.
+
+    Path Parameter:
+        song_id: ID of the song to remove.
+
+    Returns:
+        JSON object: {success: bool}
+    """
     user_id = get_request_user_id()
     if not user_id:
         return jsonify({"error": "Authentication required."}), 401
@@ -596,13 +813,29 @@ def handle_remove_user_favorite(song_id):
     return jsonify({"success": success})
 
 
-_personalized_cache = {}
+# ═══════════════════════════════════════════════════════════════════════════════
+#   PERSONALIZED RECOMMENDATIONS (SHELF GENERATOR)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Cache storing personalized recommendations based on preference combinations
+_personalized_cache: Dict[str, Tuple[Dict[str, Any], float]] = {}
+
 
 @app.route('/api/recommendations/personalized', methods=['POST'])
-def get_personalized_recommendations():
+def get_personalized_recommendations() -> Any:
     """
     Generate personalized recommendations based on user's saved preferences
-    (favorite artists, preferred genres, languages, and listening moods)
+    (favorite artists, preferred genres, languages, and listening moods).
+
+    Process:
+      1. Parses up to 3 favorite artists, genres, languages, and moods.
+      2. Checks `_personalized_cache` using composite key.
+      3. Fetches top official hit tracks for each favorite artist.
+      4. Synthesizes a tailored genre/mood mix query.
+      5. Returns structured artist shelves and tailored mix playlist.
+
+    Returns:
+        JSON object: {artistSections: list, tailoredMix: dict}
     """
     try:
         body = request.get_json() or {}
@@ -706,16 +939,18 @@ def get_personalized_recommendations():
         logger.error(f"Error generating personalized recommendations: {str(e)}")
         return jsonify({"artistSections": [], "tailoredMix": None, "error": str(e)}), 500
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  RECOMMENDATION ENGINE ROUTES
-#  All routes added by the recommendation feature — clearly grouped here.
-# ─────────────────────────────────────────────────────────────────────────────
 
-def _get_auth_token_and_user_id():
+# ═══════════════════════════════════════════════════════════════════════════════
+#   RECOMMENDATION ENGINE ROUTES & LISTENING EVENT TRACKING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_auth_token_and_user_id() -> Tuple[Optional[str], Optional[str]]:
     """
-    Extract the Supabase JWT from the Authorization header.
-    Returns (token, user_id) or (None, None) if missing/invalid.
-    Graceful: does not raise — missing auth just means guest mode.
+    Extract the Supabase JWT from the incoming Authorization header.
+
+    Returns:
+        tuple: (raw_jwt_token, user_id) or (None, None) if missing/invalid.
+        Graceful: does not raise — missing auth simply designates guest mode.
     """
     auth_header = request.headers.get('Authorization', '')
     if not auth_header.startswith('Bearer '):
@@ -733,8 +968,16 @@ def _get_auth_token_and_user_id():
         return token, None
 
 
-def _parse_preferences_from_body(body: dict) -> tuple[list, list, list]:
-    """Parse genres, moods, artists from a request body dict."""
+def _parse_preferences_from_body(body: dict) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Extract and sanitize genres, moods, and artists from a request body dictionary.
+
+    Args:
+        body: JSON request payload dictionary.
+
+    Returns:
+        tuple: (genres_list, moods_list, artists_list) of clean strings.
+    """
     raw_artists = body.get('artists', []) or []
     artists = [a if isinstance(a, str) else a.get('name', '') for a in raw_artists]
     artists = [a.strip() for a in artists if a and a.strip()]
@@ -745,25 +988,27 @@ def _parse_preferences_from_body(body: dict) -> tuple[list, list, list]:
 
 
 @app.route('/api/listening-events', methods=['POST'])
-def record_listening_event():
+def record_listening_event() -> Any:
     """
-    Record a single listening event for the recommendation engine.
+    Record a single listening telemetry event for recommendation modeling.
 
-    Request body (JSON):
-        song_id        TEXT    required — YouTube video ID
-        song_data      OBJECT  required — full song object {id, title, artist, ...}
-        event_type     TEXT    required — one of:
-                               'play_started' | 'play_completed' | 'song_skipped' |
-                               'song_liked' | 'song_unliked' | 'playlist_added' |
-                               'play_progress'
-        listen_seconds FLOAT   optional — seconds listened before this event
-        listen_fraction FLOAT  optional — fraction of song listened (0.0–1.0)
-        metadata       OBJECT  optional — free-form extra data
+    Request Body (JSON):
+        song_id (str): Required YouTube video ID.
+        song_data (dict): Required full song object {id, title, artist, duration, ...}.
+        event_type (str): Required event name:
+                          'play_started' | 'play_completed' | 'song_skipped' |
+                          'song_liked' | 'song_unliked' | 'playlist_added' |
+                          'play_progress'
+        listen_seconds (float): Optional duration listened before event.
+        listen_fraction (float): Optional fraction completed (0.0 to 1.0).
+        metadata (dict): Optional extra contextual telemetry attributes.
 
-    Auth: optional Bearer token — authenticated events are attributed to the user.
-    Anonymous events are accepted but stored without a user_id (not used in scoring).
+    Auth:
+        Optional Bearer token. Authenticated events update user persistent stats.
+        Guest events are discarded without database persistence.
 
-    Returns: {"ok": true} or {"error": "..."}
+    Returns:
+        JSON object: {"ok": true} or {"error": "..."}
     """
     VALID_EVENT_TYPES = {
         'play_started', 'play_completed', 'song_skipped',
@@ -832,22 +1077,20 @@ def record_listening_event():
 
 
 @app.route('/api/recommendations/next', methods=['GET'])
-def recommendations_next():
+def recommendations_next() -> Any:
     """
-    Get the next recommended songs for autoplay.
+    Get the next recommended songs for the autoplay queue.
 
-    Query parameters:
-        current_song_id  TEXT    optional — ID of the song currently playing
-        exclude_ids      TEXT    optional — comma-separated song IDs to exclude
-        genres           TEXT    optional — comma-separated genre slugs
-        moods            TEXT    optional — comma-separated mood strings
-        artists          TEXT    optional — comma-separated artist names
-        limit            INT     optional — max songs to return (default 5, max 10)
-
-    Auth: optional Bearer token — authenticated requests use personal listening history.
+    Query Parameters:
+        current_song_id (str): Optional reference track currently playing.
+        exclude_ids (str): Optional comma-separated list of track IDs to exclude.
+        genres (str): Optional comma-separated genre slugs.
+        moods (str): Optional comma-separated mood tags.
+        artists (str): Optional comma-separated artist names.
+        limit (int): Optional track count (default 5, capped at 10).
 
     Returns:
-        {"songs": [...], "has_personalisation": true/false}
+        JSON object: {"songs": [...], "has_personalisation": bool}
     """
     try:
         auth_token, user_id = _get_auth_token_and_user_id()
@@ -895,24 +1138,17 @@ def recommendations_next():
 
 
 @app.route('/api/recommendations/home', methods=['GET', 'POST'])
-def recommendations_home():
+def recommendations_home() -> Any:
     """
-    Get personalised home screen sections.
+    Retrieve personalized home screen shelves ('Made for You', 'Because You', 'Discover More').
 
-    Accepts body (POST) or query params (GET):
-        genres   list/comma-string — user's preferred genres
-        moods    list/comma-string — user's preferred moods
-        artists  list/comma-string — user's favourite artists
-
-    Auth: optional Bearer token.
+    Supports both GET (with query parameters) and POST (with JSON body):
+        genres (list | str): Preferred genre tags.
+        moods (list | str): Preferred mood tags.
+        artists (list | str): Favorite artists.
 
     Returns:
-        {
-          "made_for_you": [...],
-          "because_you": [{"artist": "...", "songs": [...]}, ...],
-          "discover_more": [...],
-          "has_personalisation": bool
-        }
+        JSON object: {made_for_you: list, because_you: list, discover_more: list, has_personalisation: bool}
     """
     try:
         auth_token, user_id = _get_auth_token_and_user_id()
@@ -944,20 +1180,21 @@ def recommendations_home():
 
 
 @app.route('/api/recommendations/similar/<song_id>', methods=['GET'])
-def recommendations_similar(song_id: str):
+def recommendations_similar(song_id: str) -> Any:
     """
-    Get songs similar to the given song.
+    Find songs similar to a reference track ID.
 
-    Path parameter:
-        song_id — YouTube video ID of the reference song
+    Path Parameter:
+        song_id: YouTube video ID of the reference track.
 
-    Query parameters:
-        title    TEXT optional — title of the reference song
-        artist   TEXT optional — artist of the reference song
-        exclude_ids TEXT optional — comma-separated IDs to exclude
-        limit    INT  optional — max results (default 8, max 15)
+    Query Parameters:
+        title (str): Title of the reference track.
+        artist (str): Artist name of the reference track.
+        exclude_ids (str): Comma-separated track IDs to exclude.
+        limit (int): Max similar tracks to return (default 8, max 15).
 
-    Returns: {"songs": [...]}
+    Returns:
+        JSON object: {"songs": [...]}
     """
     try:
         auth_token, user_id = _get_auth_token_and_user_id()
@@ -993,19 +1230,17 @@ def recommendations_similar(song_id: str):
 
 
 @app.route('/api/recommendations/feedback', methods=['POST'])
-def recommendations_feedback():
+def recommendations_feedback() -> Any:
     """
-    Record explicit user feedback on a recommendation (thumbs up / thumbs down).
-    This is stored as a listening event and updates user_song_stats accordingly.
+    Record explicit feedback on a recommendation item (thumbs up / thumbs down / dismiss).
 
-    Request body (JSON):
-        song_id    TEXT    required
-        song_data  OBJECT  optional
-        action     TEXT    required — 'liked' | 'disliked' | 'dismissed'
+    Request Body (JSON):
+        song_id (str): Required YouTube video ID.
+        song_data (dict): Optional song metadata dictionary.
+        action (str): Required action string: 'liked' | 'disliked' | 'dismissed'.
 
-    Auth: recommended — anonymous feedback is accepted but not attributed.
-
-    Returns: {"ok": true}
+    Returns:
+        JSON object: {"ok": true}
     """
     try:
         body = request.get_json(silent=True) or {}
@@ -1020,6 +1255,7 @@ def recommendations_feedback():
 
         auth_token, user_id = _get_auth_token_and_user_id()
 
+        # Map action into corresponding listening_event type
         event_type = {
             'liked':     'song_liked',
             'disliked':  'song_unliked',
@@ -1052,6 +1288,10 @@ def recommendations_feedback():
         return jsonify({"error": "Internal server error"}), 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#   STANDALONE SERVER EXECUTION ENTRYPOINT
+# ═══════════════════════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
     print("=" * 50)
     print("🎵 ListenUp Server (with Music Rooms)")
@@ -1060,3 +1300,4 @@ if __name__ == "__main__":
     print(f"Server running on port {port}")
     print("=" * 50)
     app.run(host='0.0.0.0', port=port, debug=False)
+

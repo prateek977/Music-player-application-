@@ -1,36 +1,48 @@
 """
-Integration Tests for ListenUp Recommendation Endpoints
-=======================================================
-Tests Flask routes:
-  - POST /api/listening-events
-  - GET  /api/recommendations/next
-  - GET  /api/recommendations/home
-  - POST /api/recommendations/home
-  - GET  /api/recommendations/similar/<song_id>
-  - POST /api/recommendations/feedback
+Integration & Regression Tests for ListenUp Recommendation Endpoints
+====================================================================
+This test suite exercises Flask HTTP routes exposed by the ListenUp recommendation engine:
+  - POST /api/listening-events: Event telemetry ingestion, payload validation, and user attribution.
+  - GET  /api/recommendations/next: Autoplay queue generation with parameter parsing.
+  - GET/POST /api/recommendations/home: Home screen recommendation shelves.
+  - GET  /api/recommendations/similar/<song_id>: Acoustic similarity recommendation endpoint.
+  - POST /api/recommendations/feedback: User feedback ingestion (likes, dislikes, dismissals).
+  - Security Verification: User ID anti-spoofing and JWT authentication attribution.
 """
 
+from __future__ import annotations
+
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
 from server import app
 
 
 class TestRecommendationEndpoints(unittest.TestCase):
+    """Integration test case validating HTTP contracts, error responses, and mock database calls."""
 
-    def setUp(self):
+    def setUp(self) -> None:
+        """Initialize test client and configure testing mode."""
         app.testing = True
         self.client = app.test_client()
 
-    def test_listening_event_missing_song_id(self):
-        """POST /api/listening-events without song_id returns 400."""
+    def test_listening_event_missing_song_id(self) -> None:
+        """
+        Validation Test:
+        Confirms that POST /api/listening-events without a 'song_id' returns HTTP 400 Bad Request.
+        """
         resp = self.client.post("/api/listening-events", json={
             "event_type": "play_started"
         })
         self.assertEqual(resp.status_code, 400)
         self.assertIn("song_id is required", resp.get_json().get("error", ""))
 
-    def test_listening_event_invalid_type(self):
-        """POST /api/listening-events with unknown event_type returns 400."""
+    def test_listening_event_invalid_type(self) -> None:
+        """
+        Validation Test:
+        Confirms that POST /api/listening-events with an unrecognized 'event_type'
+        returns HTTP 400 Bad Request with an enumerated list of valid types.
+        """
         resp = self.client.post("/api/listening-events", json={
             "song_id": "vid_123",
             "event_type": "invalid_magic_event"
@@ -40,8 +52,12 @@ class TestRecommendationEndpoints(unittest.TestCase):
 
     @patch("server.insert_listening_event")
     @patch("server.upsert_user_song_stats")
-    def test_listening_event_valid_guest(self, mock_upsert, mock_insert):
-        """POST /api/listening-events valid request returns 200 ok: True."""
+    def test_listening_event_valid_guest(self, mock_upsert: MagicMock, mock_insert: MagicMock) -> None:
+        """
+        Telemetry Test (Guest):
+        Validates that a correctly formed listening event submitted without authentication
+        returns HTTP 200 {"ok": True} and executes non-blocking insertion.
+        """
         mock_insert.return_value = True
         mock_upsert.return_value = True
 
@@ -62,8 +78,12 @@ class TestRecommendationEndpoints(unittest.TestCase):
         mock_insert.assert_called_once()
 
     @patch("server.get_next_recommendations")
-    def test_recommendations_next(self, mock_get_next):
-        """GET /api/recommendations/next returns list of recommended songs."""
+    def test_recommendations_next(self, mock_get_next: MagicMock) -> None:
+        """
+        Autoplay Route Test:
+        Validates GET /api/recommendations/next parses query arguments (genres, limit)
+        and formats JSON output with 'songs' array.
+        """
         mock_get_next.return_value = [
             {"id": "rec_1", "title": "Song 1", "artist": "Artist 1"},
             {"id": "rec_2", "title": "Song 2", "artist": "Artist 2"}
@@ -77,8 +97,12 @@ class TestRecommendationEndpoints(unittest.TestCase):
         self.assertEqual(data["songs"][0]["id"], "rec_1")
 
     @patch("server.get_home_sections")
-    def test_recommendations_home(self, mock_home):
-        """POST /api/recommendations/home returns structured sections."""
+    def test_recommendations_home(self, mock_home: MagicMock) -> None:
+        """
+        Home Shelves Route Test:
+        Validates POST /api/recommendations/home returns structured recommendation shelves
+        ('made_for_you', 'because_you', 'discover_more') and personalization flags.
+        """
         mock_home.return_value = {
             "made_for_you": [{"id": "m1", "title": "Made 1"}],
             "because_you": [{"artist": "Arijit Singh", "songs": [{"id": "b1", "title": "Because 1"}]}],
@@ -99,8 +123,12 @@ class TestRecommendationEndpoints(unittest.TestCase):
         self.assertTrue(data["has_personalisation"])
 
     @patch("server.get_similar_songs")
-    def test_recommendations_similar(self, mock_similar):
-        """GET /api/recommendations/similar/<song_id> returns similar songs."""
+    def test_recommendations_similar(self, mock_similar: MagicMock) -> None:
+        """
+        Acoustic Similarity Route Test:
+        Validates GET /api/recommendations/similar/<song_id> resolves similar tracks
+        given track title and artist query hints.
+        """
         mock_similar.return_value = [
             {"id": "sim_1", "title": "Similar Track", "artist": "Arijit Singh"}
         ]
@@ -113,8 +141,11 @@ class TestRecommendationEndpoints(unittest.TestCase):
 
     @patch("server.insert_listening_event")
     @patch("server.upsert_user_song_stats")
-    def test_recommendations_feedback(self, mock_upsert, mock_insert):
-        """POST /api/recommendations/feedback records user feedback."""
+    def test_recommendations_feedback(self, mock_upsert: MagicMock, mock_insert: MagicMock) -> None:
+        """
+        User Feedback Route Test:
+        Validates POST /api/recommendations/feedback processes explicit user actions ('liked').
+        """
         mock_insert.return_value = True
         mock_upsert.return_value = True
 
@@ -126,8 +157,11 @@ class TestRecommendationEndpoints(unittest.TestCase):
         self.assertTrue(resp.get_json().get("ok"))
         mock_insert.assert_called_once()
 
-    def test_recommendations_feedback_invalid_action(self):
-        """POST /api/recommendations/feedback with bad action returns 400."""
+    def test_recommendations_feedback_invalid_action(self) -> None:
+        """
+        Validation Test:
+        Confirms that POST /api/recommendations/feedback with an unapproved action string returns 400.
+        """
         resp = self.client.post("/api/recommendations/feedback", json={
             "song_id": "song_123",
             "action": "not_an_action"
@@ -136,8 +170,13 @@ class TestRecommendationEndpoints(unittest.TestCase):
 
     @patch("server.insert_listening_event")
     @patch("server.upsert_user_song_stats")
-    def test_user_id_in_body_is_not_spoofed(self, mock_upsert, mock_insert):
-        """User cannot spoof user_id by putting it in request body; must come from JWT."""
+    def test_user_id_in_body_is_not_spoofed(self, mock_upsert: MagicMock, mock_insert: MagicMock) -> None:
+        """
+        Security Test (Anti-Spoofing):
+        Verifies that unauthenticated callers cannot spoof another user's identity
+        by injecting a 'user_id' in the JSON body. The user_id must come strictly
+        from a verified Supabase JWT Bearer token.
+        """
         mock_insert.return_value = True
         mock_upsert.return_value = True
 
@@ -155,8 +194,12 @@ class TestRecommendationEndpoints(unittest.TestCase):
 
     @patch("server.insert_listening_event")
     @patch("server.upsert_user_song_stats")
-    def test_authenticated_listening_event(self, mock_upsert, mock_insert):
-        """Authenticated requests with valid Bearer token attribute event to verified user_id."""
+    def test_authenticated_listening_event(self, mock_upsert: MagicMock, mock_insert: MagicMock) -> None:
+        """
+        Authentication Attribution Test:
+        Validates that requests with a verified Bearer token properly attribute
+        listening events and aggregate statistics to the decoded user_id.
+        """
         mock_insert.return_value = True
         mock_upsert.return_value = True
 
@@ -181,4 +224,3 @@ class TestRecommendationEndpoints(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

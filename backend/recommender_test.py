@@ -1,56 +1,70 @@
 """
-Unit Tests for ListenUp Recommendation Engine
-==============================================
-Covers:
-  - Text normalization & token overlap
-  - Genre and mood matching
-  - Artist preference scoring
-  - Listening history scoring & boost for liked songs
-  - Skip penalty scaling and capping
-  - Recency penalty calculations
-  - Audio characteristics scoring (duration, view count)
-  - Discovery scoring and artist diversity cap
-  - Candidate exclusions (current song, exclude_ids)
-  - Missing metadata resilience
-  - Cold-start handling (no user history / no preferences)
-  - Query generation logic
+Comprehensive Unit & Integration Test Suite for ListenUp Recommendation Engine
+==============================================================================
+Test Coverage:
+  1. Parameter Configuration:
+     - Verifies sum of composite scoring weights equals 1.0.
+  2. Text Processing & NLP Utilities:
+     - Normalization of strings and dictionaries, whitespace collapsing, lowercase.
+     - Jaccard token overlap similarity computation.
+  3. Recommendation Heuristic Sub-Scorers:
+     - Genre keyword taxonomy matching and cold-start fallback.
+     - Mood taxonomy matching.
+     - Artist explicit preference scoring (exact match vs token overlap).
+     - Listening history scoring: boosts for likes/completions, bounded skip penalties.
+     - Audio characteristics: duration sweet spot (150s-360s) and log-scaled popularity.
+     - Discovery diversity scoring: artist concentration penalties.
+     - Recency suppression: 1-hour playback penalty window.
+  4. Candidate Scoring & Filter Robustness:
+     - Handling hard exclusions (current song, queue exclusions, missing IDs).
+     - Missing metadata resilience (graceful scoring without title/artist/duration).
+     - Cold-start safety (scoring new users without listening history).
+  5. End-to-End Recommendation Pipeline:
+     - Enforcement of ARTIST_DIVERSITY_CAP (max 2 songs per artist).
+     - Exclusion of currently playing track from autoplay recommendations.
+     - History candidate seeding with liked / high-engagement tracks.
+     - Soft negative artist dampening when skips exceed plays.
 """
+
+from __future__ import annotations
 
 import math
 import unittest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import recommender
 from recommender import (
-    SCORE_WEIGHTS,
-    RECENT_PLAY_WINDOW_SEC,
-    RECENT_PLAY_PENALTY,
-    MAX_SKIP_PENALTY,
-    LIKED_SONG_BOOST,
     ARTIST_DIVERSITY_CAP,
-    _normalise,
-    _token_overlap,
-    _genre_score_for_song,
-    _mood_score_for_song,
+    LIKED_SONG_BOOST,
+    MAX_SKIP_PENALTY,
+    RECENT_PLAY_PENALTY,
+    RECENT_PLAY_WINDOW_SEC,
+    SCORE_WEIGHTS,
     _artist_preference_score,
-    _listening_history_score,
     _audio_characteristics_score,
-    _discovery_score,
-    _recency_multiplier,
     _build_query_from_prefs,
-    score_candidate,
+    _discovery_score,
+    _extract_artist_stats,
+    _genre_score_for_song,
+    _get_top_history_artists,
+    _listening_history_score,
+    _mood_score_for_song,
+    _normalise,
+    _recency_multiplier,
+    _token_overlap,
+    get_home_sections,
     get_next_recommendations,
     get_similar_songs,
-    get_home_sections,
-    _extract_artist_stats,
-    _get_top_history_artists,
+    score_candidate,
 )
 
 
 class TestRecommenderScoring(unittest.TestCase):
+    """Unit tests for individual scoring heuristics, weights, and mathematical formulas."""
 
-    def setUp(self):
+    def setUp(self) -> None:
+        """Initialize standard fixture data for candidate song tests."""
         self.sample_song = {
             "id": "vid123",
             "title": "Kesariya - Brahmastra",
@@ -59,20 +73,32 @@ class TestRecommenderScoring(unittest.TestCase):
             "viewCount": 50000000,
         }
 
-    def test_weights_sum_to_one(self):
-        """Configuration check: all weights must sum to exactly 1.0."""
+    def test_weights_sum_to_one(self) -> None:
+        """
+        Configuration Check:
+        Verifies that all dimension coefficients in SCORE_WEIGHTS sum exactly to 1.0.
+        Ensures proper mathematical normalization of composite scores.
+        """
         total = sum(SCORE_WEIGHTS.values())
         self.assertAlmostEqual(total, 1.0, places=5)
 
-    def test_normalise_and_token_overlap(self):
-        """Verify string normalisation and token overlap."""
+    def test_normalise_and_token_overlap(self) -> None:
+        """
+        NLP Utilities Test:
+        Verifies string normalization (case folding, whitespace stripping)
+        and Jaccard token overlap calculation between string pairs.
+        """
         self.assertEqual(_normalise("  Hello   WORLD!  "), "hello world!")
         self.assertEqual(_token_overlap("", "hello"), 0.0)
         self.assertEqual(_token_overlap("arijit singh", "arijit singh"), 1.0)
         self.assertGreater(_token_overlap("arijit singh", "arijit official"), 0.2)
 
-    def test_genre_score(self):
-        """Genre matching scores higher when keywords match song title or artist."""
+    def test_genre_score(self) -> None:
+        """
+        Genre Matching Test:
+        Confirms that songs containing genre taxonomy keywords score significantly higher
+        than irrelevant songs, and returns 0.5 neutral baseline when user has no preferences.
+        """
         bollywood_song = {"title": "Tum Hi Ho Bollywood Hit", "artist": "Arijit Singh"}
         rock_song = {"title": "Sweet Child O Mine Rock", "artist": "Guns N Roses"}
 
@@ -83,8 +109,12 @@ class TestRecommenderScoring(unittest.TestCase):
         # Neutral score when no user genres
         self.assertEqual(_genre_score_for_song(bollywood_song, []), 0.5)
 
-    def test_mood_score(self):
-        """Mood matching aligns with mood keyword taxonomy."""
+    def test_mood_score(self) -> None:
+        """
+        Mood Matching Test:
+        Ensures tracks aligning with user mood keywords receive higher relevance scores
+        than conflicting moods, with 0.5 neutral fallback for unspecified moods.
+        """
         chill_song = {"title": "Midnight Chill Lofi Beats", "artist": "ChilledCow"}
         party_song = {"title": "Ultimate Party Dance Anthem", "artist": "DJ Club"}
 
@@ -95,8 +125,12 @@ class TestRecommenderScoring(unittest.TestCase):
         # Neutral score when no user moods
         self.assertEqual(_mood_score_for_song(chill_song, []), 0.5)
 
-    def test_artist_preference_score(self):
-        """User preferred artists get top score; non-preferred get neutral/lower."""
+    def test_artist_preference_score(self) -> None:
+        """
+        Artist Preference Test:
+        Validates that tracks by user's explicitly preferred artists receive perfect score (1.0),
+        partial matches receive token overlap scores, and empty preferences return 0.5.
+        """
         match_song = {"artist": "Arijit Singh"}
         mismatch_song = {"artist": "The Rolling Stones"}
 
@@ -109,8 +143,11 @@ class TestRecommenderScoring(unittest.TestCase):
         # Neutral score when user has no artist preferences
         self.assertEqual(_artist_preference_score(match_song, []), 0.5)
 
-    def test_listening_history_score_liked_boost(self):
-        """Liked songs receive the configured boost."""
+    def test_listening_history_score_liked_boost(self) -> None:
+        """
+        Engagement Boost Test:
+        Validates that favorited/liked songs receive the exact configured LIKED_SONG_BOOST (0.25).
+        """
         song = {"id": "song_1"}
         stats_neutral = {}
         stats_liked = {"song_1": {"is_liked": True, "play_count": 0, "skip_count": 0}}
@@ -121,8 +158,12 @@ class TestRecommenderScoring(unittest.TestCase):
         self.assertEqual(score_neutral, 0.5)
         self.assertAlmostEqual(score_liked, 0.5 + LIKED_SONG_BOOST, places=4)
 
-    def test_listening_history_skip_penalty(self):
-        """Skipped songs get penalized, capped at MAX_SKIP_PENALTY."""
+    def test_listening_history_skip_penalty(self) -> None:
+        """
+        Skip Penalty Test:
+        Ensures that skipped tracks are penalized proportionally, while ensuring
+        cumulative penalties are strictly capped at MAX_SKIP_PENALTY (0.45).
+        """
         song = {"id": "song_2"}
         stats_1_skip = {"song_2": {"is_liked": False, "play_count": 1, "skip_count": 1}}
         stats_10_skips = {"song_2": {"is_liked": False, "play_count": 1, "skip_count": 10}}
@@ -134,8 +175,12 @@ class TestRecommenderScoring(unittest.TestCase):
         self.assertLessEqual(score_10, 0.5 - MAX_SKIP_PENALTY + 0.1)
         self.assertGreaterEqual(score_10, 0.0)
 
-    def test_audio_characteristics_score(self):
-        """Ideal duration (2.5 - 6 min) and high views receive optimal scores."""
+    def test_audio_characteristics_score(self) -> None:
+        """
+        Audio Fitness Test:
+        Verifies that songs in the duration sweet-spot (150s to 360s) with high view counts
+        score significantly higher than short preview clips (<60s) or low-engagement tracks.
+        """
         ideal_song = {"duration": 210, "viewCount": 100000000}
         too_short_song = {"duration": 40, "viewCount": 100}
 
@@ -144,8 +189,14 @@ class TestRecommenderScoring(unittest.TestCase):
 
         self.assertGreater(score_ideal, score_short)
 
-    def test_discovery_score_diversity(self):
-        """Artist over-representation in a result set is heavily penalised."""
+    def test_discovery_score_diversity(self) -> None:
+        """
+        Diversity Incentive Test:
+        Validates the step-down penalty schedule for repeated artists in recommendations:
+          0 prior tracks -> 1.0
+          1 prior track  -> 0.5
+          2+ prior tracks -> 0.1
+        """
         song = {"artist": "Taylor Swift"}
         first_pick = _discovery_score(song, {"taylor swift": 0})
         second_pick = _discovery_score(song, {"taylor swift": 1})
@@ -155,8 +206,12 @@ class TestRecommenderScoring(unittest.TestCase):
         self.assertEqual(second_pick, 0.5)
         self.assertEqual(third_pick, 0.1)
 
-    def test_recency_penalty_calculation(self):
-        """Songs played within RECENT_PLAY_WINDOW_SEC get penalized; older ones don't."""
+    def test_recency_penalty_calculation(self) -> None:
+        """
+        Recency Suppression Test:
+        Verifies that tracks played within RECENT_PLAY_WINDOW_SEC (1 hour) receive
+        the 0.6x multiplier, whereas tracks played days ago or never played receive 1.0.
+        """
         now = datetime.now(timezone.utc)
         just_played = (now - timedelta(minutes=10)).isoformat()
         long_ago = (now - timedelta(days=2)).isoformat()
@@ -172,8 +227,12 @@ class TestRecommenderScoring(unittest.TestCase):
         self.assertEqual(mul_old, 1.0)
         self.assertEqual(mul_none, 1.0)
 
-    def test_score_candidate_exclusions(self):
-        """Songs in excluded_ids or with missing id return None."""
+    def test_score_candidate_exclusions(self) -> None:
+        """
+        Candidate Filter Test:
+        Confirms that candidate tracks missing an ID or present in `excluded_ids`
+        are rejected immediately with None.
+        """
         self.assertIsNone(score_candidate(
             {"id": ""},
             user_genres=[], user_moods=[], user_artists=[],
@@ -186,8 +245,12 @@ class TestRecommenderScoring(unittest.TestCase):
             stats_by_song={}, result_artist_counts={}, excluded_ids={"skip_me"}
         ))
 
-    def test_score_candidate_cold_start(self):
-        """Cold-start user (no history, no preferences) still gets a valid score."""
+    def test_score_candidate_cold_start(self) -> None:
+        """
+        Cold Start Safety Test:
+        Verifies that a new user with zero listening history and empty preferences
+        still receives a non-zero, bounded composite recommendation score.
+        """
         score = score_candidate(
             self.sample_song,
             user_genres=[],
@@ -201,8 +264,12 @@ class TestRecommenderScoring(unittest.TestCase):
         self.assertGreater(score, 0.0)
         self.assertLessEqual(score, 1.5)
 
-    def test_missing_metadata_resilience(self):
-        """Songs with empty or missing fields score without raising exceptions."""
+    def test_missing_metadata_resilience(self) -> None:
+        """
+        Data Resilience Test:
+        Confirms that candidate tracks with sparse metadata (missing title, artist, duration)
+        are scored gracefully without raising KeyErrors or crashes.
+        """
         incomplete_song = {"id": "sparse_1"}  # no title, artist, duration, viewCount
         score = score_candidate(
             incomplete_song,
@@ -218,8 +285,10 @@ class TestRecommenderScoring(unittest.TestCase):
 
 
 class TestRecommendationPipeline(unittest.TestCase):
+    """Integration tests for recommendation queue generation, diversity caps, and candidate selection."""
 
-    def setUp(self):
+    def setUp(self) -> None:
+        """Set up candidate pool fixtures for pipeline integration tests."""
         self.mock_candidates = [
             {"id": "s1", "title": "Kesariya", "artist": "Arijit Singh", "duration": 210, "viewCount": 80000000},
             {"id": "s2", "title": "Lover", "artist": "Diljit Dosanjh", "duration": 190, "viewCount": 50000000},
@@ -231,8 +300,12 @@ class TestRecommendationPipeline(unittest.TestCase):
 
     @patch("recommender._fetch_candidates_ytdlp")
     @patch("recommender.fetch_user_song_stats")
-    def test_artist_diversity_cap_enforced(self, mock_stats, mock_fetch):
-        """Ensure no single artist monopolises recommendations beyond ARTIST_DIVERSITY_CAP."""
+    def test_artist_diversity_cap_enforced(self, mock_stats: MagicMock, mock_fetch: MagicMock) -> None:
+        """
+        Diversity Cap Test:
+        Verifies that even if multiple tracks by Arijit Singh score highest,
+        the recommendation pipeline restricts his presence to ARTIST_DIVERSITY_CAP (2 tracks).
+        """
         mock_stats.return_value = []
         mock_fetch.return_value = list(self.mock_candidates)
 
@@ -252,8 +325,11 @@ class TestRecommendationPipeline(unittest.TestCase):
 
     @patch("recommender._fetch_candidates_ytdlp")
     @patch("recommender.fetch_user_song_stats")
-    def test_current_song_excluded(self, mock_stats, mock_fetch):
-        """The currently playing track must never be recommended as next."""
+    def test_current_song_excluded(self, mock_stats: MagicMock, mock_fetch: MagicMock) -> None:
+        """
+        Deduplication Test:
+        Confirms that the currently active track ('s1') is strictly excluded from upcoming queue.
+        """
         mock_stats.return_value = []
         mock_fetch.return_value = list(self.mock_candidates)
 
@@ -272,8 +348,12 @@ class TestRecommendationPipeline(unittest.TestCase):
         self.assertNotIn("s1", rec_ids)
 
     @patch("recommender._fetch_candidates_ytdlp")
-    def test_empty_candidates_returns_empty_list(self, mock_fetch):
-        """When YouTube / candidate fetch returns nothing, returns empty list without error."""
+    def test_empty_candidates_returns_empty_list(self, mock_fetch: MagicMock) -> None:
+        """
+        Fail-Safe Test:
+        Ensures that if YouTube search yields zero candidates, the function returns
+        an empty list cleanly without raising exceptions.
+        """
         mock_fetch.return_value = []
         recs = get_next_recommendations(
             user_id=None,
@@ -286,8 +366,12 @@ class TestRecommendationPipeline(unittest.TestCase):
         )
         self.assertEqual(recs, [])
 
-    def test_build_query_from_prefs(self):
-        """Query covers user artists and genres."""
+    def test_build_query_from_prefs(self) -> None:
+        """
+        Query Formulation Test:
+        Confirms that synthesized YouTube search queries incorporate favorite artists,
+        genres, and moods, and provide cold-start keywords when inputs are empty.
+        """
         q = _build_query_from_prefs(
             user_genres=["bollywood"],
             user_artists=["Arijit Singh", "Diljit Dosanjh"],
@@ -297,12 +381,16 @@ class TestRecommendationPipeline(unittest.TestCase):
         self.assertIn("Arijit Singh", q)
         self.assertIn("Diljit Dosanjh", q)
 
-        # Cold start query
+        # Cold start query verification
         q_cold = _build_query_from_prefs([], [], [], None)
         self.assertIn("trending", q_cold)
 
-    def test_extract_artist_stats_and_top_artists(self):
-        """Aggregate user history per artist and extract top affinity artists."""
+    def test_extract_artist_stats_and_top_artists(self) -> None:
+        """
+        Artist Profile Aggregation Test:
+        Validates historical playback aggregation across multiple songs by the same artist
+        and ranking based on the engagement affinity formula.
+        """
         history = [
             {
                 "song_id": "h1",
@@ -330,8 +418,12 @@ class TestRecommendationPipeline(unittest.TestCase):
         self.assertIn("Arijit Singh", top_artists)
         self.assertNotIn("Skip Artist", top_artists)
 
-    def test_artist_level_skip_soft_negative(self):
-        """Artists with consistent skip pattern receive soft negative dampening."""
+    def test_artist_level_skip_soft_negative(self) -> None:
+        """
+        Habit Dampening Test:
+        Ensures that artists with persistent skip histories (skips >= 2 and skips > plays)
+        receive soft negative scoring deductions.
+        """
         artist_stats = {
             "skip artist": {"plays": 0, "skips": 4, "completes": 0, "likes": 0, "listen_sec": 20, "raw_name": "Skip Artist"},
             "arijit singh": {"plays": 10, "skips": 0, "completes": 10, "likes": 2, "listen_sec": 2000, "raw_name": "Arijit Singh"},
@@ -359,8 +451,12 @@ class TestRecommendationPipeline(unittest.TestCase):
 
     @patch("recommender._fetch_candidates_ytdlp")
     @patch("recommender.fetch_user_song_stats")
-    def test_history_candidate_seeding(self, mock_stats, mock_fetch):
-        """Non-recent liked songs from history are seeded into recommendation candidates."""
+    def test_history_candidate_seeding(self, mock_stats: MagicMock, mock_fetch: MagicMock) -> None:
+        """
+        History Seeding Test:
+        Validates that previously liked songs from user history are seeded into the
+        recommendation candidates alongside newly fetched YouTube tracks.
+        """
         mock_stats.return_value = [
             {
                 "song_id": "seed_liked_1",
@@ -389,4 +485,3 @@ class TestRecommendationPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
